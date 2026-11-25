@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -128,7 +129,15 @@ function loadInitialTheme(): 'light' | 'dark' {
 }
 
 export default function App() {
-  const { authReady, user: firebaseUser, signInWithGoogle, setSyncStatus } = useFirebase();
+  const {
+    authReady,
+    user: firebaseUser,
+    authError,
+    syncError,
+    signInWithGoogle,
+    setSyncStatus,
+    clearAuthError,
+  } = useFirebase();
 
   const [publicApps, setPublicApps] = useState<PublicAppEntry[]>(() =>
     loadInitialPublicApps()
@@ -278,11 +287,13 @@ export default function App() {
 
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
+    let lastDeviceHeartbeat = 0;
 
     async function initCloudSync(uid: string) {
       setSyncStatus('syncing');
       try {
         await registerConnectedDevice(uid, systemNameRef.current);
+        lastDeviceHeartbeat = Date.now();
         if (cancelled) return;
 
         const cloud = await fetchCloudWorkspaceState(uid, systemNameRef.current);
@@ -371,11 +382,33 @@ export default function App() {
 
     initCloudSync(firebaseUser.uid);
 
+    const handleVisibilityRefresh = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        firebaseUser &&
+        firebaseUser.emailVerified &&
+        Date.now() - lastDeviceHeartbeat > 5 * 60 * 1000
+      ) {
+        lastDeviceHeartbeat = Date.now();
+        registerConnectedDevice(firebaseUser.uid, systemNameRef.current).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityRefresh);
+
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', handleVisibilityRefresh);
       if (unsubscribe) unsubscribe();
     };
   }, [authReady, firebaseUser, setSyncStatus, applyRemoteEncryptedEnvelope]);
+
+  // Keep open detail modal synced with real-time vault updates
+  useEffect(() => {
+    setDetailApp((prev) => {
+      if (!prev) return null;
+      return vaultApps.find((item) => item.id === prev.id) ?? null;
+    });
+  }, [vaultApps]);
 
   // Sync theme on <html> element & theme pref
   useEffect(() => {
@@ -693,6 +726,7 @@ export default function App() {
 
   function handleResetVault() {
     clearStoredEnvelope();
+    envelopeRef.current = null;
     setEnvelope(null);
     lockVault();
   }
@@ -1525,6 +1559,29 @@ export default function App() {
 
       {/* Main Content Viewport */}
       <main className="flex-1 px-3.5 py-4 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] max-w-7xl w-full mx-auto space-y-4 sm:space-y-5">
+        {!showLockGate && navFilter.type !== 'system' && (authError || syncError) && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/90 dark:bg-rose-950/40 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-300"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span className="truncate">{authError || syncError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                clearAuthError();
+                setSyncStatus(firebaseUser ? 'idle' : 'idle', null);
+              }}
+              aria-label="ปิดการแจ้งเตือน"
+              className="text-rose-600 dark:text-rose-400 hover:opacity-75 cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Workspace Sub-Toolbar */}
         {!showLockGate && navFilter.type === 'system' && (
           <div className="flex items-center justify-between gap-3">

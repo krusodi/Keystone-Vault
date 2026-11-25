@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -92,6 +92,10 @@ export function SystemSettingsView({
   // System Name Form State
   const [nameInput, setNameInput] = useState(systemName);
   const [savingName, setSavingName] = useState(false);
+
+  useEffect(() => {
+    setNameInput(systemName);
+  }, [systemName]);
   const [nameNotice, setNameNotice] = useState<{
     type: 'success' | 'error';
     text: string;
