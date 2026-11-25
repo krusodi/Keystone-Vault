@@ -46,6 +46,24 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(userId)).data.uid == userId;
     }
 
+    function hasParentSharedWorkspace(workspaceId) {
+      return exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.id == workspaceId;
+    }
+
+    function isWorkspaceOwner(workspaceId) {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
+    }
+
+    function isWorkspaceMember(workspaceId) {
+      return isVerifiedUser() && (
+        isWorkspaceOwner(workspaceId) ||
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
+      );
+    }
+
     function isValidUserWorkspace(data) {
       return data is map &&
         data.keys().hasAll(['uid', 'systemName', 'createdAt', 'updatedAt']) &&
@@ -122,6 +140,117 @@ service cloud.firestore {
         data.keys().hasAll(['ownerId', 'id', 'deviceName', 'platform', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly(['ownerId', 'id', 'deviceName', 'platform', 'createdAt', 'updatedAt']) &&
         isValidId(data.ownerId) &&
+        isValidId(data.id) &&
+        data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 80 &&
+        data.platform is string && data.platform in ['desktop', 'tablet', 'mobile', 'unknown'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUidList(listVal) {
+      return listVal is list &&
+        listVal.size() >= 1 &&
+        listVal.size() <= 20 &&
+        isValidId(listVal[0]);
+    }
+
+    function isValidWorkspaceRoot(data) {
+      return data is map &&
+        data.keys().hasAll(['id', 'ownerId', 'systemName', 'memberUids', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'systemName', 'memberUids', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.systemName is string && data.systemName.size() >= 1 && data.systemName.size() <= 40 &&
+        isValidUidList(data.memberUids) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMember(data) {
+      return data is map &&
+        data.keys().hasAll(['uid', 'workspaceId', 'workspaceOwnerId', 'role', 'label', 'inviteToken', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'workspaceId', 'workspaceOwnerId', 'role', 'label', 'inviteToken', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.workspaceOwnerId) &&
+        data.role is string && data.role in ['owner', 'member'] &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 60 &&
+        data.inviteToken is string && data.inviteToken.size() <= 64 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceInvite(data) {
+      return data is map &&
+        data.keys().hasAll(['id', 'workspaceId', 'ownerId', 'active', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'workspaceId', 'ownerId', 'active', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) && data.id.size() >= 8 && data.id.size() <= 64 &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.ownerId) &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspacePublicIndex(data) {
+      return data is map &&
+        data.keys().hasAll(['workspaceId', 'ownerId', 'appIds', 'deviceIds', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'ownerId', 'appIds', 'deviceIds', 'updatedAt']) &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.ownerId) &&
+        data.appIds is list && data.appIds.size() <= 200 &&
+        (data.appIds.size() == 0 || isValidId(data.appIds[0])) &&
+        data.deviceIds is list && data.deviceIds.size() <= 50 &&
+        (data.deviceIds.size() == 0 || isValidId(data.deviceIds[0])) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspacePublicApp(data) {
+      return data is map &&
+        data.keys().hasAll(['workspaceId', 'ownerId', 'memberUids', 'id', 'name', 'logo_type', 'logo_value', 'target_url', 'category', 'sort_order', 'is_favorite', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'ownerId', 'memberUids', 'id', 'name', 'logo_type', 'logo_value', 'target_url', 'category', 'sort_order', 'is_favorite', 'lastUsedAt', 'createdAt', 'updatedAt']) &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.ownerId) &&
+        isValidUidList(data.memberUids) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.logo_type is string && data.logo_type in ['upload', 'url', 'favicon', 'preset_icon'] &&
+        data.logo_value is string && data.logo_value.size() <= 200000 &&
+        data.target_url is string && data.target_url.size() >= 1 && data.target_url.size() <= 2048 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        data.sort_order is int && data.sort_order >= 0 && data.sort_order <= 10000 &&
+        data.is_favorite is bool &&
+        (!('lastUsedAt' in data) || (data.lastUsedAt is int && data.lastUsedAt >= 0)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceEncryptedVault(data) {
+      return data is map &&
+        data.keys().hasAll(['workspaceId', 'ownerId', 'version', 'kdf', 'iterations', 'cipher', 'iv', 'ciphertext', 'keySlots', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'ownerId', 'version', 'kdf', 'iterations', 'cipher', 'iv', 'ciphertext', 'keySlots', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.ownerId) &&
+        data.version == 2 &&
+        data.kdf == 'PBKDF2-SHA256' &&
+        data.iterations is int && data.iterations >= 100000 && data.iterations <= 2000000 &&
+        data.cipher == 'AES-256-GCM' &&
+        data.iv is string && data.iv.size() >= 1 && data.iv.size() <= 64 &&
+        data.ciphertext is string && data.ciphertext.size() >= 1 && data.ciphertext.size() <= 850000 &&
+        data.keySlots is list && data.keySlots.size() >= 1 && data.keySlots.size() <= 20 &&
+        isValidKeySlot(data.keySlots[0]) &&
+        data.clientUpdatedAt is int && data.clientUpdatedAt >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceDeviceSession(data) {
+      return data is map &&
+        data.keys().hasAll(['workspaceId', 'ownerId', 'memberUids', 'id', 'deviceName', 'platform', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'ownerId', 'memberUids', 'id', 'deviceName', 'platform', 'createdAt', 'updatedAt']) &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.ownerId) &&
+        isValidUidList(data.memberUids) &&
         isValidId(data.id) &&
         data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 80 &&
         data.platform is string && data.platform in ['desktop', 'tablet', 'mobile', 'unknown'] &&
@@ -261,6 +390,284 @@ service cloud.firestore {
             'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(deviceId) && isOwner(userId) && hasParentWorkspace(userId);
+      }
+    }
+
+    match /workspaces/{workspaceId} {
+      allow get: if isValidId(workspaceId) && isVerifiedUser() && (
+        existing().ownerId == request.auth.uid ||
+        request.auth.uid in existing().memberUids ||
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
+      );
+      allow list: if isVerifiedUser() && (
+        existing().ownerId == request.auth.uid ||
+        request.auth.uid in existing().memberUids
+      );
+      allow create: if isValidId(workspaceId) &&
+        isVerifiedUser() &&
+        isValidWorkspaceRoot(incoming()) &&
+        (workspaceId != 'main' || isBootstrappedAdmin()) &&
+        incoming().id == workspaceId &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().memberUids.size() == 1 &&
+        request.auth.uid in incoming().memberUids &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(workspaceId) &&
+        isVerifiedUser() &&
+        isValidWorkspaceRoot(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Authorized member updates shared systemName
+          (
+            (existing().ownerId == request.auth.uid || request.auth.uid in existing().memberUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['systemName', 'updatedAt'])
+          ) ||
+          // Action 2: Owner updates memberUids list
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+          ) ||
+          // Action 3: Verified user joins atomically with invite-backed member record
+          (
+            !(request.auth.uid in existing().memberUids) &&
+            incoming().memberUids.hasAll(existing().memberUids) &&
+            incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+            request.auth.uid in incoming().memberUids &&
+            existsAfter(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(workspaceId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+
+      match /members/{memberId} {
+        allow get: if isValidId(workspaceId) && isValidId(memberId) && isVerifiedUser() && (
+          memberId == request.auth.uid || isWorkspaceMember(workspaceId)
+        );
+        allow list: if isVerifiedUser() && (
+          existing().uid == request.auth.uid ||
+          existing().workspaceOwnerId == request.auth.uid
+        );
+        allow create: if isValidId(workspaceId) &&
+          isValidId(memberId) &&
+          isVerifiedUser() &&
+          isValidWorkspaceMember(incoming()) &&
+          memberId == request.auth.uid &&
+          incoming().uid == request.auth.uid &&
+          incoming().workspaceId == workspaceId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().workspaceOwnerId == get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId && (
+            // Owner bootstrapping own member document
+            (
+              incoming().role == 'owner' &&
+              isWorkspaceOwner(workspaceId)
+            ) ||
+            // Secondary device/user joining with valid active invite token
+            (
+              incoming().role == 'member' &&
+              incoming().inviteToken.size() >= 8 &&
+              isValidId(incoming().inviteToken) &&
+              exists(/databases/$(database)/documents/workspaces/$(workspaceId)/invites/$(incoming().inviteToken)) &&
+              get(/databases/$(database)/documents/workspaces/$(workspaceId)/invites/$(incoming().inviteToken)).data.active == true
+            )
+          );
+        allow update: if isValidId(workspaceId) &&
+          isValidId(memberId) &&
+          isVerifiedUser() &&
+          isValidWorkspaceMember(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().workspaceOwnerId == existing().workspaceOwnerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) && (
+            (isWorkspaceOwner(workspaceId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'label', 'updatedAt'])) ||
+            (memberId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['label', 'updatedAt']))
+          );
+        allow delete: if isValidId(workspaceId) && isValidId(memberId) && isVerifiedUser() && hasParentSharedWorkspace(workspaceId) && (
+          (isWorkspaceOwner(workspaceId) && memberId != request.auth.uid) ||
+          (memberId == request.auth.uid && existing().role == 'member')
+        );
+      }
+
+      match /invites/{inviteId} {
+        allow get: if isValidId(workspaceId) && isValidId(inviteId) && inviteId.size() >= 8 && isVerifiedUser() && (
+          isWorkspaceOwner(workspaceId) ||
+          existing().active == true
+        );
+        allow list: if isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(workspaceId) &&
+          isValidId(inviteId) &&
+          isWorkspaceOwner(workspaceId) &&
+          isValidWorkspaceInvite(incoming()) &&
+          incoming().id == inviteId &&
+          incoming().workspaceId == workspaceId &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId);
+        allow update: if isValidId(workspaceId) &&
+          isValidId(inviteId) &&
+          isWorkspaceOwner(workspaceId) &&
+          isValidWorkspaceInvite(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']);
+        allow delete: if isValidId(workspaceId) && isValidId(inviteId) && isWorkspaceOwner(workspaceId) && hasParentSharedWorkspace(workspaceId);
+      }
+
+      match /publicState/{docId} {
+        allow get: if isValidId(workspaceId) && isValidId(docId) && docId == 'index' && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
+        allow list: if false;
+        allow create: if isValidId(workspaceId) &&
+          isValidId(docId) &&
+          docId == 'index' &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspacePublicIndex(incoming()) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().ownerId == get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId;
+        allow update: if isValidId(workspaceId) &&
+          isValidId(docId) &&
+          docId == 'index' &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspacePublicIndex(incoming()) &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['appIds', 'deviceIds', 'updatedAt']);
+        allow delete: if isValidId(workspaceId) && isValidId(docId) && isWorkspaceOwner(workspaceId) && hasParentSharedWorkspace(workspaceId);
+      }
+
+      match /publicApps/{appId} {
+        allow get: if isValidId(workspaceId) && isValidId(appId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
+        allow list: if isVerifiedUser() && (
+          existing().ownerId == request.auth.uid ||
+          request.auth.uid in existing().memberUids
+        );
+        allow create: if isValidId(workspaceId) &&
+          isValidId(appId) &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspacePublicApp(incoming()) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().id == appId &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().ownerId == get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId;
+        allow update: if isValidId(workspaceId) &&
+          isValidId(appId) &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspacePublicApp(incoming()) &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) && (
+            // Action 1: Member updates app metadata or lastUsedAt
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'logo_type',
+              'logo_value',
+              'target_url',
+              'category',
+              'sort_order',
+              'is_favorite',
+              'lastUsedAt',
+              'memberUids',
+              'updatedAt'
+            ]) ||
+            // Action 2: Syncing membership access list
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+          );
+        allow delete: if isValidId(workspaceId) && isValidId(appId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
+      }
+
+      match /vaultData/{vaultId} {
+        allow get: if isValidId(workspaceId) && isValidId(vaultId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
+        allow list: if isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(workspaceId) &&
+          isValidId(vaultId) &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspaceEncryptedVault(incoming()) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().ownerId == get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId;
+        allow update: if isValidId(workspaceId) &&
+          isValidId(vaultId) &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspaceEncryptedVault(incoming()) &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'version',
+            'kdf',
+            'iterations',
+            'cipher',
+            'iv',
+            'ciphertext',
+            'keySlots',
+            'clientUpdatedAt',
+            'updatedAt'
+          ]);
+        allow delete: if isValidId(workspaceId) && isValidId(vaultId) && isWorkspaceOwner(workspaceId) && hasParentSharedWorkspace(workspaceId);
+      }
+
+      match /devices/{deviceId} {
+        allow get: if isValidId(workspaceId) && isValidId(deviceId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
+        allow list: if isVerifiedUser() && (
+          existing().ownerId == request.auth.uid ||
+          request.auth.uid in existing().memberUids
+        );
+        allow create: if isValidId(workspaceId) &&
+          isValidId(deviceId) &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspaceDeviceSession(incoming()) &&
+          incoming().workspaceId == workspaceId &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().id == deviceId &&
+          request.auth.uid in incoming().memberUids &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId);
+        allow update: if isValidId(workspaceId) &&
+          isValidId(deviceId) &&
+          isWorkspaceMember(workspaceId) &&
+          isValidWorkspaceDeviceSession(incoming()) &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentSharedWorkspace(workspaceId) && (
+            // Action 1: Device owner refreshes device session
+            (
+              existing().ownerId == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['deviceName', 'platform', 'memberUids', 'updatedAt'])
+            ) ||
+            // Action 2: Syncing membership visibility across devices
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+          );
+        allow delete: if isValidId(workspaceId) && isValidId(deviceId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId) && (
+          existing().ownerId == request.auth.uid || isWorkspaceOwner(workspaceId)
+        );
       }
     }
   }

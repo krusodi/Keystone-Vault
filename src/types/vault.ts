@@ -127,3 +127,18 @@ export interface SyncedDeviceInfo {
   updatedAt: number;
 }
 
+export interface WorkspaceInviteInfo {
+  id: string;
+  workspaceId: string;
+  active: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkspaceMemberInfo {
+  uid: string;
+  role: 'owner' | 'member';
+  label: string;
+  updatedAt: number;
+}
+

@@ -4,9 +4,11 @@ import {
   CheckCircle2,
   Cloud,
   CloudOff,
+  Copy,
   Eye,
   EyeOff,
   KeyRound,
+  Link2,
   LogOut,
   Monitor,
   Pencil,
@@ -29,6 +31,8 @@ import {
   type AdminRole,
   type PublicAdminSummary,
   type SyncedDeviceInfo,
+  type WorkspaceInviteInfo,
+  type WorkspaceMemberInfo,
 } from '../types/vault';
 import { useFirebase } from './FirebaseProvider';
 
@@ -61,6 +65,14 @@ interface SystemSettingsViewProps {
   connectedDevices: SyncedDeviceInfo[];
   currentDeviceId: string;
   onRemoveDevice: (deviceId: string) => Promise<void>;
+  workspaceId: string;
+  isWorkspaceOwner: boolean;
+  workspaceInvites: WorkspaceInviteInfo[];
+  workspaceMembers: WorkspaceMemberInfo[];
+  onCreateWorkspaceInvite: () => Promise<WorkspaceInviteInfo>;
+  onRevokeWorkspaceInvite: (inviteId: string) => Promise<void>;
+  onRemoveWorkspaceMember: (memberUid: string) => Promise<void>;
+  onJoinWorkspace: (workspaceId: string, inviteCode: string) => Promise<void>;
 }
 
 export function SystemSettingsView({
@@ -76,6 +88,14 @@ export function SystemSettingsView({
   connectedDevices,
   currentDeviceId,
   onRemoveDevice,
+  workspaceId,
+  isWorkspaceOwner,
+  workspaceInvites,
+  workspaceMembers,
+  onCreateWorkspaceInvite,
+  onRevokeWorkspaceInvite,
+  onRemoveWorkspaceMember,
+  onJoinWorkspace,
 }: SystemSettingsViewProps) {
   const {
     user,
@@ -89,6 +109,13 @@ export function SystemSettingsView({
     signOutGoogle,
   } = useFirebase();
   const [manualSyncNotice, setManualSyncNotice] = useState<string | null>(null);
+  const [creatingInvite, setCreatingInvite] = useState(false);
+  const [inviteCopyNotice, setInviteCopyNotice] = useState<string | null>(null);
+  const [joinFormOpen, setJoinFormOpen] = useState(false);
+  const [joinWsInput, setJoinWsInput] = useState('main');
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joiningWs, setJoiningWs] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   // System Name Form State
   const [nameInput, setNameInput] = useState(systemName);
   const [savingName, setSavingName] = useState(false);
@@ -562,6 +589,7 @@ export function SystemSettingsView({
                 </p>
                 <p className="text-slate-500 dark:text-slate-400">
                   โปรเจกต์: <span className="font-mono">{projectId}</span>
+                  {' · '}ฐานข้อมูลร่วม: <span className="font-mono font-semibold text-sky-700 dark:text-sky-300">{workspaceId}</span>
                   {lastSyncedAt && (
                     <>
                       {' · '}อัปเดตล่าสุด {new Date(lastSyncedAt).toLocaleString('th-TH')}
@@ -595,62 +623,254 @@ export function SystemSettingsView({
         </div>
 
         {user && (
-          <div className="mt-4 space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
-              <span>อุปกรณ์ที่เชื่อมต่อแบบ Real-time ({connectedDevices.length})</span>
-              <span className="font-normal text-slate-500 dark:text-slate-400">
-                ซิงก์ทุกการเปลี่ยนแปลงอัตโนมัติ
-              </span>
-            </div>
+          <div className="mt-4 space-y-4">
+            {/* Shared Workspace Invite & Multi-Account Linking */}
+            <div className="rounded-xl border border-sky-200/80 dark:border-sky-900/60 bg-sky-50/40 dark:bg-sky-950/20 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    เชื่อมต่ออุปกรณ์อื่นด้วยฐานข้อมูลเดียวกัน ({workspaceId})
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    ใช้บัญชี Google เดียวกันได้ทันทีทุกเครื่อง หรือสร้างรหัสเชิญเพื่อให้เครื่องที่ใช้บัญชี Google อื่นเข้าใช้ฐานข้อมูลนี้ร่วมกัน
+                  </p>
+                </div>
 
-            {connectedDevices.length > 0 && (
-              <div className="divide-y divide-slate-200/80 dark:divide-slate-800 border border-slate-200/90 dark:border-slate-800 rounded-xl overflow-hidden">
-                {connectedDevices.map((dev) => {
-                  const isCurrent = dev.id === currentDeviceId;
-                  return (
-                    <div
-                      key={dev.id}
-                      className="px-3.5 py-2.5 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 text-xs"
+                <div className="flex flex-wrap items-center gap-2">
+                  {isWorkspaceOwner && (
+                    <button
+                      type="button"
+                      disabled={creatingInvite}
+                      onClick={async () => {
+                        setInviteCopyNotice(null);
+                        setCreatingInvite(true);
+                        try {
+                          await onCreateWorkspaceInvite();
+                        } finally {
+                          setCreatingInvite(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-sky-50 dark:bg-sky-950/40 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
-                          {dev.platform === 'mobile' ? (
-                            <Smartphone className="w-4 h-4" />
-                          ) : dev.platform === 'tablet' ? (
-                            <Tablet className="w-4 h-4" />
-                          ) : (
-                            <Monitor className="w-4 h-4" />
-                          )}
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>{creatingInvite ? 'กำลังสร้าง...' : 'สร้างรหัสเชื่อมต่ออุปกรณ์'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setJoinFormOpen((v) => !v);
+                      setJoinError(null);
+                    }}
+                    className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap"
+                  >
+                    <Link2 className="w-3.5 h-3.5" />
+                    <span>เข้าร่วมฐานข้อมูลอื่น</span>
+                  </button>
+                </div>
+              </div>
+
+              {inviteCopyNotice && (
+                <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>{inviteCopyNotice}</span>
+                </div>
+              )}
+
+              {isWorkspaceOwner && workspaceInvites.length > 0 && (
+                <div className="divide-y divide-sky-200/70 dark:divide-sky-900/50 border border-sky-200/80 dark:border-sky-900/60 rounded-lg bg-white dark:bg-slate-900 overflow-hidden">
+                  {workspaceInvites.map((inv) => {
+                    const shareUrl = `${window.location.origin}/?ws=${encodeURIComponent(inv.workspaceId)}&invite=${encodeURIComponent(inv.id)}`;
+                    return (
+                      <div
+                        key={inv.id}
+                        className="px-3 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                          {inv.id}
                         </div>
-                        <div className="min-w-0">
-                          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                            {dev.deviceName}
-                            {isCurrent && (
-                              <span className="ml-2 text-emerald-600 dark:text-emerald-400 font-medium">
-                                · อุปกรณ์นี้
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-slate-500 dark:text-slate-400 tabular-nums">
-                            เชื่อมต่อเมื่อ {new Date(dev.updatedAt).toLocaleString('th-TH')}
-                          </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await navigator.clipboard?.writeText(inv.id);
+                              setInviteCopyNotice(`คัดลอกรหัสเชื่อมต่อ ${inv.id} แล้ว`);
+                            }}
+                            className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>คัดลอกรหัส</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await navigator.clipboard?.writeText(shareUrl);
+                              setInviteCopyNotice('คัดลอกลิงก์เชิญสำหรับเปิดบนอุปกรณ์อื่นแล้ว');
+                            }}
+                            className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100 cursor-pointer"
+                          >
+                            <Link2 className="w-3 h-3" />
+                            <span>คัดลอกลิงก์</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRevokeWorkspaceInvite(inv.id)}
+                            className="h-7 px-2 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                          >
+                            ยกเลิก
+                          </button>
                         </div>
                       </div>
+                    );
+                  })}
+                </div>
+              )}
 
-                      {!isCurrent && (
-                        <button
-                          type="button"
-                          onClick={() => onRemoveDevice(dev.id)}
-                          className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
-                        >
-                          นำออก
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+              {joinFormOpen && (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setJoinError(null);
+                    if (!joinCodeInput.trim()) {
+                      setJoinError('กรุณากรอกรหัสเชื่อมต่อ');
+                      return;
+                    }
+                    setJoiningWs(true);
+                    try {
+                      await onJoinWorkspace(joinWsInput.trim() || 'main', joinCodeInput.trim());
+                      setJoinCodeInput('');
+                      setJoinFormOpen(false);
+                    } catch (err) {
+                      setJoinError(err instanceof Error ? err.message : 'ไม่สามารถเข้าร่วมได้');
+                    } finally {
+                      setJoiningWs(false);
+                    }
+                  }}
+                  className="pt-2 border-t border-sky-200/70 dark:border-sky-900/50 space-y-2.5"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      value={joinWsInput}
+                      onChange={(e) => setJoinWsInput(e.target.value)}
+                      placeholder="รหัสฐานข้อมูล (เช่น main)"
+                      className="h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100"
+                    />
+                    <input
+                      type="text"
+                      value={joinCodeInput}
+                      onChange={(e) => setJoinCodeInput(e.target.value)}
+                      placeholder="รหัสเชิญ (เช่น KV-XXXX-XXXX-XXXX)"
+                      className="h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100"
+                    />
+                  </div>
+                  {joinError && (
+                    <p className="text-xs text-rose-600 dark:text-rose-400">{joinError}</p>
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="submit"
+                      disabled={joiningWs}
+                      className="h-8 px-3.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+                    >
+                      {joiningWs ? 'กำลังเชื่อมต่อ...' : 'เข้าร่วมฐานข้อมูล'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {workspaceMembers.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    บัญชีที่เชื่อมต่อฐานข้อมูลร่วมกัน ({workspaceMembers.length})
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {workspaceMembers.map((m) => (
+                      <div
+                        key={m.uid}
+                        className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      >
+                        <span className="font-medium text-slate-800 dark:text-slate-200">
+                          {m.label}
+                        </span>
+                        <span className="text-slate-400">
+                          {m.role === 'owner' ? 'ผู้สร้าง' : 'ผู้ร่วมใช้'}
+                        </span>
+                        {isWorkspaceOwner && m.role !== 'owner' && (
+                          <button
+                            type="button"
+                            onClick={() => onRemoveWorkspaceMember(m.uid)}
+                            className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                            aria-label={`นำ ${m.label} ออก`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <span>อุปกรณ์ที่เชื่อมต่อแบบ Real-time ({connectedDevices.length})</span>
+                <span className="font-normal text-slate-500 dark:text-slate-400">
+                  ซิงก์ทุกการเปลี่ยนแปลงอัตโนมัติ
+                </span>
               </div>
-            )}
+
+              {connectedDevices.length > 0 && (
+                <div className="divide-y divide-slate-200/80 dark:divide-slate-800 border border-slate-200/90 dark:border-slate-800 rounded-xl overflow-hidden">
+                  {connectedDevices.map((dev) => {
+                    const isCurrent = dev.id === currentDeviceId;
+                    return (
+                      <div
+                        key={dev.id}
+                        className="px-3.5 py-2.5 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-sky-50 dark:bg-sky-950/40 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+                            {dev.platform === 'mobile' ? (
+                              <Smartphone className="w-4 h-4" />
+                            ) : dev.platform === 'tablet' ? (
+                              <Tablet className="w-4 h-4" />
+                            ) : (
+                              <Monitor className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                              {dev.deviceName}
+                              {isCurrent && (
+                                <span className="ml-2 text-emerald-600 dark:text-emerald-400 font-medium">
+                                  · อุปกรณ์นี้
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-slate-500 dark:text-slate-400 tabular-nums">
+                              เชื่อมต่อเมื่อ {new Date(dev.updatedAt).toLocaleString('th-TH')}
+                            </div>
+                          </div>
+                        </div>
+
+                        {!isCurrent && (
+                          <button
+                            type="button"
+                            onClick={() => onRemoveDevice(dev.id)}
+                            className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+                          >
+                            นำออก
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </section>

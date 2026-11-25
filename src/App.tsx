@@ -45,10 +45,22 @@ import {
   VAULT_SENTINEL,
 } from './lib/crypto';
 import {
+  consumeWorkspaceInviteFromUrl,
+  createPersonalSharedWorkspace,
+  createWorkspaceInvite,
+  DEFAULT_SHARED_WORKSPACE_ID,
   fetchCloudWorkspaceState,
   getLocalDeviceIdentity,
+  getSavedWorkspaceId,
+  joinWorkspaceWithCode,
+  listWorkspaceInvites,
+  listWorkspaceMembers,
+  propagateWorkspaceMembersToDocs,
   registerConnectedDevice,
   removeConnectedDevice,
+  removeWorkspaceMember,
+  resolveSharedWorkspaceAccess,
+  revokeWorkspaceInvite,
   saveCloudSystemName,
   saveEncryptedVaultToFirestore,
   subscribeCloudWorkspace,
@@ -83,6 +95,8 @@ import {
   type PublicAppEntry,
   type SyncedDeviceInfo,
   type VaultSettings,
+  type WorkspaceInviteInfo,
+  type WorkspaceMemberInfo,
 } from './types/vault';
 
 type NavFilter =
@@ -100,6 +114,7 @@ interface ClipboardNotice {
 }
 
 const THEME_PREF_KEY = 'keystone_theme_pref_v1';
+const INITIAL_URL_INVITE = consumeWorkspaceInviteFromUrl();
 
 function loadInitialPublicApps(): PublicAppEntry[] {
   // Clean up any legacy unencrypted workspace storage key
@@ -148,6 +163,25 @@ export default function App() {
   const [connectedDevices, setConnectedDevices] = useState<SyncedDeviceInfo[]>([]);
   const currentDeviceId = useMemo(() => getLocalDeviceIdentity().id, []);
 
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(() =>
+    getSavedWorkspaceId()
+  );
+  const [isWorkspaceOwner, setIsWorkspaceOwner] = useState(false);
+  const [workspaceInvites, setWorkspaceInvites] = useState<WorkspaceInviteInfo[]>([]);
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMemberInfo[]>([]);
+  const [needsInvitePrompt, setNeedsInvitePrompt] = useState<{
+    workspaceId: string;
+  } | null>(null);
+  const [inviteWsInput, setInviteWsInput] = useState(
+    () => INITIAL_URL_INVITE.workspaceId || DEFAULT_SHARED_WORKSPACE_ID
+  );
+  const [inviteCodeInput, setInviteCodeInput] = useState(
+    () => INITIAL_URL_INVITE.inviteCode || ''
+  );
+  const [inviteJoinError, setInviteJoinError] = useState<string | null>(null);
+  const [isJoiningInvite, setIsJoiningInvite] = useState(false);
+  const [reconnectTick, setReconnectTick] = useState(0);
+
   const [systemName, setSystemName] = useState<string>(() => loadSystemName());
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [activeAdminId, setActiveAdminId] = useState<string | null>(null);
@@ -168,6 +202,12 @@ export default function App() {
   const systemNameRef = useRef(systemName);
   const isUnlockedRef = useRef(isUnlocked);
   const activeAdminIdRef = useRef(activeAdminId);
+  const workspaceIdRef = useRef(activeWorkspaceId);
+  const needsInviteRef = useRef(needsInvitePrompt !== null);
+  const pendingUrlInviteRef = useRef<{
+    workspaceId?: string;
+    inviteCode?: string;
+  } | null>(INITIAL_URL_INVITE.inviteCode ? INITIAL_URL_INVITE : null);
 
   useEffect(() => {
     envelopeRef.current = envelope;
@@ -188,6 +228,14 @@ export default function App() {
   useEffect(() => {
     activeAdminIdRef.current = activeAdminId;
   }, [activeAdminId]);
+
+  useEffect(() => {
+    workspaceIdRef.current = activeWorkspaceId;
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    needsInviteRef.current = needsInvitePrompt !== null;
+  }, [needsInvitePrompt]);
 
   const [navFilter, setNavFilter] = useState<NavFilter>({ type: 'home' });
   const [showAuthGate, setShowAuthGate] = useState(false);
@@ -274,10 +322,14 @@ export default function App() {
     document.title = systemName;
   }, [systemName]);
 
-  // Connect Firestore real-time cloud sync when Google Firebase user is authenticated
+  // Connect Firestore real-time cloud sync to shared workspace when Google Firebase user is authenticated
   useEffect(() => {
     if (!authReady || !firebaseUser) {
       setConnectedDevices([]);
+      setWorkspaceInvites([]);
+      setWorkspaceMembers([]);
+      setIsWorkspaceOwner(false);
+      setNeedsInvitePrompt(null);
       return;
     }
     if (!firebaseUser.emailVerified) {
@@ -289,15 +341,80 @@ export default function App() {
     let unsubscribe: (() => void) | null = null;
     let lastDeviceHeartbeat = 0;
 
-    async function initCloudSync(uid: string) {
+    async function initCloudSync(uid: string, email: string | null | undefined) {
       setSyncStatus('syncing');
       try {
-        await registerConnectedDevice(uid, systemNameRef.current);
+        const targetWsId = workspaceIdRef.current || DEFAULT_SHARED_WORKSPACE_ID;
+
+        const urlInvite = pendingUrlInviteRef.current;
+        if (urlInvite?.inviteCode) {
+          const inviteCode = urlInvite.inviteCode;
+          pendingUrlInviteRef.current = null;
+          const joinWs = urlInvite.workspaceId || DEFAULT_SHARED_WORKSPACE_ID;
+          try {
+            await joinWorkspaceWithCode(
+              uid,
+              joinWs,
+              inviteCode,
+              getLocalDeviceIdentity().deviceName
+            );
+            if (joinWs !== targetWsId) {
+              workspaceIdRef.current = joinWs;
+              setActiveWorkspaceId(joinWs);
+              return;
+            }
+          } catch (joinErr) {
+            if (!cancelled) {
+              setInviteWsInput(joinWs);
+              setInviteCodeInput(inviteCode);
+              setInviteJoinError(
+                joinErr instanceof Error
+                  ? joinErr.message
+                  : 'ไม่สามารถเชื่อมต่อด้วยลิงก์เชิญนี้ได้'
+              );
+            }
+          }
+        }
+
+        const access = await resolveSharedWorkspaceAccess(
+          uid,
+          email,
+          targetWsId,
+          systemNameRef.current
+        );
+        if (cancelled) return;
+
+        if (access.status === 'needs_invite') {
+          setNeedsInvitePrompt({ workspaceId: access.workspaceId });
+          setInviteWsInput(access.workspaceId);
+          setConnectedDevices([]);
+          setWorkspaceInvites([]);
+          setWorkspaceMembers([]);
+          setIsWorkspaceOwner(false);
+          setSyncStatus('idle');
+          return;
+        }
+
+        setNeedsInvitePrompt(null);
+        setInviteJoinError(null);
+        setIsWorkspaceOwner(access.isOwner);
+        workspaceIdRef.current = access.workspaceId;
+
+        await registerConnectedDevice(uid, access.workspaceId);
         lastDeviceHeartbeat = Date.now();
         if (cancelled) return;
 
-        const cloud = await fetchCloudWorkspaceState(uid, systemNameRef.current);
+        const [cloud, members, invites] = await Promise.all([
+          fetchCloudWorkspaceState(uid, access.workspaceId),
+          listWorkspaceMembers(uid, access.workspaceId, access.isOwner).catch(() => []),
+          access.isOwner
+            ? listWorkspaceInvites(uid, access.workspaceId).catch(() => [])
+            : Promise.resolve([]),
+        ]);
         if (cancelled) return;
+
+        setWorkspaceMembers(members);
+        setWorkspaceInvites(invites);
 
         if (cloud.systemName) {
           const cleaned = saveSystemName(cloud.systemName);
@@ -317,7 +434,7 @@ export default function App() {
             await applyRemoteEncryptedEnvelope(cloud.envelope);
           }
         } else if (localEnv && localEnv.version === 2) {
-          await saveEncryptedVaultToFirestore(uid, localEnv, systemNameRef.current);
+          await saveEncryptedVaultToFirestore(uid, access.workspaceId, localEnv);
         }
 
         if (
@@ -330,19 +447,39 @@ export default function App() {
         } else if (!cloud.publicApps && publicAppsRef.current.length > 0) {
           await syncPublicAppsToFirestore(
             uid,
-            publicAppsRef.current,
-            systemNameRef.current
+            access.workspaceId,
+            publicAppsRef.current
           );
         }
 
         if (cancelled) return;
         setSyncStatus('synced');
 
-        unsubscribe = subscribeCloudWorkspace(uid, {
+        unsubscribe = subscribeCloudWorkspace(uid, access.workspaceId, {
           onSystemName: (cloudName) => {
             const cleaned = saveSystemName(cloudName);
             setSystemName(cleaned);
             setSettings((prev) => ({ ...prev, systemName: cleaned }));
+          },
+          onMembersChanged: (memberUids) => {
+            if (!memberUids.includes(uid)) {
+              setNeedsInvitePrompt({ workspaceId: access.workspaceId });
+              setConnectedDevices([]);
+              setWorkspaceMembers([]);
+              setWorkspaceInvites([]);
+              setIsWorkspaceOwner(false);
+              return;
+            }
+            if (access.isOwner) {
+              propagateWorkspaceMembersToDocs(access.workspaceId, memberUids).catch(
+                () => {}
+              );
+            }
+            listWorkspaceMembers(uid, access.workspaceId, access.isOwner)
+              .then((list) => {
+                if (!cancelled) setWorkspaceMembers(list);
+              })
+              .catch(() => {});
           },
           onPublicApps: (cloudApps) => {
             savePublicApps(cloudApps);
@@ -380,17 +517,20 @@ export default function App() {
       }
     }
 
-    initCloudSync(firebaseUser.uid);
+    initCloudSync(firebaseUser.uid, firebaseUser.email);
 
     const handleVisibilityRefresh = () => {
       if (
         document.visibilityState === 'visible' &&
         firebaseUser &&
         firebaseUser.emailVerified &&
+        !needsInviteRef.current &&
         Date.now() - lastDeviceHeartbeat > 5 * 60 * 1000
       ) {
         lastDeviceHeartbeat = Date.now();
-        registerConnectedDevice(firebaseUser.uid, systemNameRef.current).catch(() => {});
+        registerConnectedDevice(firebaseUser.uid, workspaceIdRef.current).catch(
+          () => {}
+        );
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityRefresh);
@@ -400,7 +540,14 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityRefresh);
       if (unsubscribe) unsubscribe();
     };
-  }, [authReady, firebaseUser, setSyncStatus, applyRemoteEncryptedEnvelope]);
+  }, [
+    authReady,
+    firebaseUser,
+    activeWorkspaceId,
+    reconnectTick,
+    setSyncStatus,
+    applyRemoteEncryptedEnvelope,
+  ]);
 
   // Keep open detail modal synced with real-time vault updates
   useEffect(() => {
@@ -438,8 +585,9 @@ export default function App() {
         throw new Error('เซสชันถูกล็อก กรุณาปลดล็อกใหม่อีกครั้ง');
       }
 
+      const currentEnv = envelopeRef.current;
       const keySlots =
-        overrideKeySlots ?? (envelope?.version === 2 ? envelope.keySlots : []);
+        overrideKeySlots ?? (currentEnv?.version === 2 ? currentEnv.keySlots : []);
       if (keySlots.length === 0) {
         throw new Error('ไม่พบบัญชีผู้ดูแลระบบสำหรับเข้ารหัสคลัง');
       }
@@ -461,18 +609,18 @@ export default function App() {
       savePublicApps(nextPublic);
       setPublicApps(nextPublic);
 
-      if (firebaseUser && firebaseUser.emailVerified) {
+      if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
         setSyncStatus('syncing');
         try {
           await saveEncryptedVaultToFirestore(
             firebaseUser.uid,
-            nextEnvelope,
-            nextSettings.systemName || systemNameRef.current
+            workspaceIdRef.current,
+            nextEnvelope
           );
           await syncPublicAppsToFirestore(
             firebaseUser.uid,
-            nextPublic,
-            nextSettings.systemName || systemNameRef.current
+            workspaceIdRef.current,
+            nextPublic
           );
           setSyncStatus('synced');
         } catch (err) {
@@ -486,7 +634,7 @@ export default function App() {
         }
       }
     },
-    [envelope, firebaseUser, setSyncStatus]
+    [firebaseUser, setSyncStatus]
   );
 
   // Activity tracking & Auto-Lock timer while unlocked
@@ -663,13 +811,22 @@ export default function App() {
     savePublicApps(nextPublic);
     setPublicApps(nextPublic);
 
-    if (res.wasMigratedFromV1 && firebaseUser && firebaseUser.emailVerified) {
-      saveEncryptedVaultToFirestore(firebaseUser.uid, res.envelope, resolvedSystemName).catch(
-        () => {}
-      );
-      syncPublicAppsToFirestore(firebaseUser.uid, nextPublic, resolvedSystemName).catch(
-        () => {}
-      );
+    if (
+      res.wasMigratedFromV1 &&
+      firebaseUser &&
+      firebaseUser.emailVerified &&
+      !needsInviteRef.current
+    ) {
+      saveEncryptedVaultToFirestore(
+        firebaseUser.uid,
+        workspaceIdRef.current,
+        res.envelope
+      ).catch(() => {});
+      syncPublicAppsToFirestore(
+        firebaseUser.uid,
+        workspaceIdRef.current,
+        nextPublic
+      ).catch(() => {});
     }
 
     fulfillPendingAction();
@@ -712,13 +869,17 @@ export default function App() {
     savePublicApps(nextPublic);
     setPublicApps(nextPublic);
 
-    if (firebaseUser && firebaseUser.emailVerified) {
-      saveEncryptedVaultToFirestore(firebaseUser.uid, res.envelope, resolvedSystemName).catch(
-        () => {}
-      );
-      syncPublicAppsToFirestore(firebaseUser.uid, nextPublic, resolvedSystemName).catch(
-        () => {}
-      );
+    if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+      saveEncryptedVaultToFirestore(
+        firebaseUser.uid,
+        workspaceIdRef.current,
+        res.envelope
+      ).catch(() => {});
+      syncPublicAppsToFirestore(
+        firebaseUser.uid,
+        workspaceIdRef.current,
+        nextPublic
+      ).catch(() => {});
     }
 
     fulfillPendingAction();
@@ -840,8 +1001,10 @@ export default function App() {
       );
       setVaultApps(nextVault);
       persistEncryptedVault(nextVault, customCategories, settings).catch(() => {});
-    } else if (firebaseUser && firebaseUser.emailVerified) {
-      updatePublicAppLastUsedInFirestore(firebaseUser.uid, app.id, now).catch(() => {});
+    } else if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+      updatePublicAppLastUsedInFirestore(workspaceIdRef.current, app.id, now).catch(
+        () => {}
+      );
     }
   }
 
@@ -902,10 +1065,10 @@ export default function App() {
     if (isUnlocked) {
       await persistEncryptedVault(vaultApps, customCategories, nextSettings);
     }
-    if (firebaseUser && firebaseUser.emailVerified) {
+    if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
       setSyncStatus('syncing');
       try {
-        await saveCloudSystemName(firebaseUser.uid, cleaned);
+        await saveCloudSystemName(workspaceIdRef.current, cleaned);
         setSyncStatus('synced');
       } catch (err) {
         setSyncStatus(
@@ -917,14 +1080,15 @@ export default function App() {
   }
 
   async function handleManualCloudSync() {
-    if (!firebaseUser || !firebaseUser.emailVerified) return;
+    if (!firebaseUser || !firebaseUser.emailVerified || needsInviteRef.current) return;
+    const wsId = workspaceIdRef.current;
     setSyncStatus('syncing');
     try {
-      await registerConnectedDevice(firebaseUser.uid, systemName);
-      await saveCloudSystemName(firebaseUser.uid, systemName);
-      await syncPublicAppsToFirestore(firebaseUser.uid, publicApps, systemName);
+      await registerConnectedDevice(firebaseUser.uid, wsId);
+      await saveCloudSystemName(wsId, systemName);
+      await syncPublicAppsToFirestore(firebaseUser.uid, wsId, publicApps);
       if (envelope && envelope.version === 2) {
-        await saveEncryptedVaultToFirestore(firebaseUser.uid, envelope, systemName);
+        await saveEncryptedVaultToFirestore(firebaseUser.uid, wsId, envelope);
       }
       setSyncStatus('synced');
     } catch (err) {
@@ -939,8 +1103,78 @@ export default function App() {
   }
 
   async function handleRemoveDevice(deviceId: string) {
+    if (!firebaseUser || !firebaseUser.emailVerified || needsInviteRef.current) return;
+    await removeConnectedDevice(workspaceIdRef.current, deviceId);
+  }
+
+  async function handleCreateWorkspaceInvite() {
+    if (!firebaseUser || !firebaseUser.emailVerified) {
+      throw new Error('กรุณาเข้าสู่ระบบบัญชี Google ก่อน');
+    }
+    const invite = await createWorkspaceInvite(
+      firebaseUser.uid,
+      workspaceIdRef.current
+    );
+    setWorkspaceInvites((prev) => [invite, ...prev]);
+    return invite;
+  }
+
+  async function handleRevokeWorkspaceInvite(inviteId: string) {
+    await revokeWorkspaceInvite(workspaceIdRef.current, inviteId);
+    setWorkspaceInvites((prev) => prev.filter((item) => item.id !== inviteId));
+  }
+
+  async function handleRemoveWorkspaceMember(memberUid: string) {
+    await removeWorkspaceMember(workspaceIdRef.current, memberUid);
+    const updated = workspaceMembers.filter((m) => m.uid !== memberUid);
+    setWorkspaceMembers(updated);
+    if (isWorkspaceOwner) {
+      const nextUids = updated.map((m) => m.uid);
+      if (nextUids.length > 0) {
+        await propagateWorkspaceMembersToDocs(workspaceIdRef.current, nextUids);
+      }
+    }
+  }
+
+  async function handleJoinWorkspace(targetWsId: string, inviteCode: string) {
+    if (!firebaseUser || !firebaseUser.emailVerified) {
+      throw new Error('กรุณาเข้าสู่ระบบบัญชี Google ก่อน');
+    }
+    const cleanWs = targetWsId.trim() || DEFAULT_SHARED_WORKSPACE_ID;
+    await joinWorkspaceWithCode(
+      firebaseUser.uid,
+      cleanWs,
+      inviteCode,
+      getLocalDeviceIdentity().deviceName
+    );
+    setNeedsInvitePrompt(null);
+    setInviteJoinError(null);
+    setInviteCodeInput('');
+    workspaceIdRef.current = cleanWs;
+    setActiveWorkspaceId(cleanWs);
+    setReconnectTick((t) => t + 1);
+  }
+
+  async function handleCreateOwnWorkspace() {
     if (!firebaseUser || !firebaseUser.emailVerified) return;
-    await removeConnectedDevice(firebaseUser.uid, deviceId);
+    setIsJoiningInvite(true);
+    setInviteJoinError(null);
+    try {
+      const res = await createPersonalSharedWorkspace(
+        firebaseUser.uid,
+        systemNameRef.current
+      );
+      setNeedsInvitePrompt(null);
+      workspaceIdRef.current = res.workspaceId;
+      setActiveWorkspaceId(res.workspaceId);
+      setReconnectTick((t) => t + 1);
+    } catch (err) {
+      setInviteJoinError(
+        err instanceof Error ? err.message : 'ไม่สามารถสร้างฐานข้อมูลส่วนตัวได้'
+      );
+    } finally {
+      setIsJoiningInvite(false);
+    }
   }
 
   async function handleQuickCloudAction() {
@@ -1572,7 +1806,7 @@ export default function App() {
               type="button"
               onClick={() => {
                 clearAuthError();
-                setSyncStatus(firebaseUser ? 'idle' : 'idle', null);
+                setSyncStatus('idle', null);
               }}
               aria-label="ปิดการแจ้งเตือน"
               className="text-rose-600 dark:text-rose-400 hover:opacity-75 cursor-pointer shrink-0"
@@ -1580,6 +1814,83 @@ export default function App() {
               <X className="w-4 h-4" />
             </button>
           </div>
+        )}
+
+        {firebaseUser && needsInvitePrompt && (
+          <section className="bg-white/95 dark:bg-slate-900/95 border border-sky-200 dark:border-sky-800/70 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    เชื่อมต่ออุปกรณ์นี้เข้าฐานข้อมูลร่วม (รหัสฐานข้อมูล:{' '}
+                    <span className="font-mono">{needsInvitePrompt.workspaceId}</span>)
+                  </h2>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    บัญชี Google นี้ ({firebaseUser.email}) ยังไม่ได้เข้าร่วมฐานข้อมูลร่วม
+                    กรอกรหัสเชื่อมต่อที่สร้างจากเมนู ตั้งค่าระบบ บนเครื่องหลัก เพื่อซิงก์ทุกอุปกรณ์แบบ Real-time
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {inviteJoinError && (
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-lg px-3 py-2">
+                {inviteJoinError}
+              </p>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setInviteJoinError(null);
+                setIsJoiningInvite(true);
+                try {
+                  await handleJoinWorkspace(inviteWsInput, inviteCodeInput);
+                } catch (err) {
+                  setInviteJoinError(
+                    err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อฐานข้อมูลร่วมได้'
+                  );
+                } finally {
+                  setIsJoiningInvite(false);
+                }
+              }}
+              className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
+            >
+              <input
+                type="text"
+                value={inviteWsInput}
+                onChange={(e) => setInviteWsInput(e.target.value)}
+                placeholder="รหัสฐานข้อมูล (ค่าเริ่มต้น: main)"
+                className="h-10 sm:h-9 sm:w-44 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <input
+                type="text"
+                value={inviteCodeInput}
+                onChange={(e) => setInviteCodeInput(e.target.value.toUpperCase())}
+                placeholder="กรอกรหัสเชื่อมต่อ เช่น KV-XXXX-XXXX-XXXX"
+                required
+                className="flex-1 h-10 sm:h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <button
+                type="submit"
+                disabled={isJoiningInvite || !inviteCodeInput.trim()}
+                className="h-10 sm:h-9 px-4 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
+              >
+                {isJoiningInvite ? 'กำลังเชื่อมต่อ...' : 'เชื่อมต่อฐานข้อมูลร่วม'}
+              </button>
+              <button
+                type="button"
+                disabled={isJoiningInvite}
+                onClick={handleCreateOwnWorkspace}
+                className="h-10 sm:h-9 px-3.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap"
+              >
+                สร้างฐานข้อมูลส่วนตัวใหม่แทน
+              </button>
+            </form>
+          </section>
         )}
 
         {/* Workspace Sub-Toolbar */}
@@ -1726,6 +2037,14 @@ export default function App() {
               connectedDevices={connectedDevices}
               currentDeviceId={currentDeviceId}
               onRemoveDevice={handleRemoveDevice}
+              workspaceId={activeWorkspaceId}
+              isWorkspaceOwner={isWorkspaceOwner}
+              workspaceInvites={workspaceInvites}
+              workspaceMembers={workspaceMembers}
+              onCreateWorkspaceInvite={handleCreateWorkspaceInvite}
+              onRevokeWorkspaceInvite={handleRevokeWorkspaceInvite}
+              onRemoveWorkspaceMember={handleRemoveWorkspaceMember}
+              onJoinWorkspace={handleJoinWorkspace}
             />
           ) : navFilter.type === 'home' ? (
             filteredHomeApps.length === 0 ? (

@@ -2,7 +2,7 @@
   "entities": {
     "UserWorkspace": {
       "title": "UserWorkspace",
-      "description": "Per-user workspace branding and non-PII configuration synchronized with Keystone Vault.",
+      "description": "Legacy per-user workspace branding and non-PII configuration synchronized with Keystone Vault.",
       "type": "object",
       "properties": {
         "uid": {
@@ -263,28 +263,467 @@
         }
       },
       "required": ["ownerId", "id", "deviceName", "platform", "createdAt", "updatedAt"]
+    },
+    "WorkspaceRoot": {
+      "title": "WorkspaceRoot",
+      "description": "Shared multi-device workspace root synchronizing all devices onto one real-time database.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Workspace identifier (default 'main')."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the workspace creator/owner."
+        },
+        "systemName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Custom display name for the shared system."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Bounded list (1-20) of authorized member UIDs sharing this workspace."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when shared workspace was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when shared workspace was last updated."
+        }
+      },
+      "required": ["id", "ownerId", "systemName", "memberUids", "createdAt", "updatedAt"]
+    },
+    "WorkspaceMember": {
+      "title": "WorkspaceMember",
+      "description": "Authorized non-PII member record linking a Google account UID to a shared workspace.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the member."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent workspace ID."
+        },
+        "workspaceOwnerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner UID of the parent workspace."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "member"],
+          "description": "Workspace membership role."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Non-PII display label for this member device/account."
+        },
+        "inviteToken": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64,
+          "description": "Invite token used when joining (empty for owner)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when member joined."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when membership updated."
+        }
+      },
+      "required": ["uid", "workspaceId", "workspaceOwnerId", "role", "label", "inviteToken", "createdAt", "updatedAt"]
+    },
+    "WorkspaceInvite": {
+      "title": "WorkspaceInvite",
+      "description": "Owner-managed invite token enabling secondary devices with other Google accounts to join the shared workspace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Invite token ID."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target shared workspace ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner UID who issued the invite."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether this invite token can currently be used to join."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when invite was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when invite was updated."
+        }
+      },
+      "required": ["id", "workspaceId", "ownerId", "active", "createdAt", "updatedAt"]
+    },
+    "WorkspacePublicIndex": {
+      "title": "WorkspacePublicIndex",
+      "description": "Bounded index of public app IDs and device IDs for synchronizing membership access across shared docs.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent workspace ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Workspace owner UID."
+        },
+        "appIds": {
+          "type": "array",
+          "description": "Bounded list (0-200) of app document IDs in the workspace."
+        },
+        "deviceIds": {
+          "type": "array",
+          "description": "Bounded list (0-50) of device document IDs in the workspace."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when index was updated."
+        }
+      },
+      "required": ["workspaceId", "ownerId", "appIds", "deviceIds", "updatedAt"]
+    },
+    "WorkspacePublicApp": {
+      "title": "WorkspacePublicApp",
+      "description": "Shared workspace public app launcher entry visible in real time across all connected devices.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent workspace ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Workspace owner UID."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Bounded list (1-20) of authorized member UIDs."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "App entry ID."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name of the application."
+        },
+        "logo_type": {
+          "type": "string",
+          "enum": ["upload", "url", "favicon", "preset_icon"],
+          "description": "Logo source type."
+        },
+        "logo_value": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 200000,
+          "description": "Logo URL, preset key, or rasterized data URL."
+        },
+        "target_url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Validated URL or deep link."
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Category label."
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "Zero-based display sort order."
+        },
+        "is_favorite": {
+          "type": "boolean",
+          "description": "Whether the app is pinned as favorite."
+        },
+        "lastUsedAt": {
+          "type": "integer",
+          "description": "Optional epoch milliseconds when app was last launched."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when entry was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when entry was updated."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "ownerId",
+        "memberUids",
+        "id",
+        "name",
+        "logo_type",
+        "logo_value",
+        "target_url",
+        "category",
+        "sort_order",
+        "is_favorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceEncryptedVault": {
+      "title": "WorkspaceEncryptedVault",
+      "description": "Zero-knowledge encrypted vault envelope shared across all devices in the same workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent workspace ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Workspace owner UID."
+        },
+        "version": {
+          "type": "integer",
+          "description": "Envelope schema version (2)."
+        },
+        "kdf": {
+          "type": "string",
+          "enum": ["PBKDF2-SHA256"],
+          "description": "Key derivation algorithm."
+        },
+        "iterations": {
+          "type": "integer",
+          "description": "PBKDF2 iteration count."
+        },
+        "cipher": {
+          "type": "string",
+          "enum": ["AES-256-GCM"],
+          "description": "Cipher algorithm."
+        },
+        "iv": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Base64 initialization vector."
+        },
+        "ciphertext": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 850000,
+          "description": "Base64 AES-256-GCM encrypted vault payload."
+        },
+        "keySlots": {
+          "type": "array",
+          "description": "Bounded list (1-20) of per-admin wrapped DEK slots."
+        },
+        "clientUpdatedAt": {
+          "type": "integer",
+          "description": "Client-recorded epoch ms of last encryption."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when vault was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when vault was updated."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "ownerId",
+        "version",
+        "kdf",
+        "iterations",
+        "cipher",
+        "iv",
+        "ciphertext",
+        "keySlots",
+        "clientUpdatedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceDeviceSession": {
+      "title": "WorkspaceDeviceSession",
+      "description": "Connected device entry within a shared workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent workspace ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the device owner."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Bounded list (1-20) of authorized member UIDs."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique identifier of the device."
+        },
+        "deviceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Short non-PII device and browser label."
+        },
+        "platform": {
+          "type": "string",
+          "enum": ["desktop", "tablet", "mobile", "unknown"],
+          "description": "Device form factor."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when device first connected."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when device last synced."
+        }
+      },
+      "required": ["workspaceId", "ownerId", "memberUids", "id", "deviceName", "platform", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserWorkspace" },
-      "description": "User workspace branding document (systemName)."
+      "description": "Legacy per-user workspace branding document."
     },
     "/users/{userId}/publicApps/{appId}": {
       "schema": { "$ref": "#/entities/PublicAppDocument" },
-      "description": "Public launcher app metadata per user (without credentials)."
+      "description": "Legacy per-user public launcher app metadata."
     },
     "/users/{userId}/vaultData/{vaultId}": {
       "schema": { "$ref": "#/entities/EncryptedVaultDocument" },
-      "description": "Zero-knowledge encrypted credential vault envelope per user."
+      "description": "Legacy per-user encrypted vault envelope."
     },
     "/users/{userId}/devices/{deviceId}": {
       "schema": { "$ref": "#/entities/DeviceSession" },
-      "description": "Connected devices synced in real time for the user."
+      "description": "Legacy per-user device sessions."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRegistration" },
       "description": "Cloud-level admin allowlist managed exclusively by the bootstrapped admin."
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/WorkspaceRoot" },
+      "description": "Shared multi-device workspace root document."
+    },
+    "/workspaces/{workspaceId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMember" },
+      "description": "Authorized member UIDs for a shared workspace."
+    },
+    "/workspaces/{workspaceId}/invites/{inviteId}": {
+      "schema": { "$ref": "#/entities/WorkspaceInvite" },
+      "description": "Active invite tokens for connecting secondary Google accounts to the shared workspace."
+    },
+    "/workspaces/{workspaceId}/publicState/{docId}": {
+      "schema": { "$ref": "#/entities/WorkspacePublicIndex" },
+      "description": "Bounded document ID index for shared workspace membership propagation."
+    },
+    "/workspaces/{workspaceId}/publicApps/{appId}": {
+      "schema": { "$ref": "#/entities/WorkspacePublicApp" },
+      "description": "Shared real-time public launcher apps across all connected devices."
+    },
+    "/workspaces/{workspaceId}/vaultData/{vaultId}": {
+      "schema": { "$ref": "#/entities/WorkspaceEncryptedVault" },
+      "description": "Shared zero-knowledge AES-256-GCM encrypted vault across all connected devices."
+    },
+    "/workspaces/{workspaceId}/devices/{deviceId}": {
+      "schema": { "$ref": "#/entities/WorkspaceDeviceSession" },
+      "description": "All devices connected in real time to the shared workspace."
     }
   }
 }
