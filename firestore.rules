@@ -117,6 +117,18 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidDeviceSession(data) {
+      return data is map &&
+        data.keys().hasAll(['ownerId', 'id', 'deviceName', 'platform', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'id', 'deviceName', 'platform', 'createdAt', 'updatedAt']) &&
+        isValidId(data.ownerId) &&
+        isValidId(data.id) &&
+        data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 80 &&
+        data.platform is string && data.platform in ['desktop', 'tablet', 'mobile', 'unknown'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     match /admins/{adminId} {
       allow get: if isValidId(adminId) && (isOwner(adminId) || isBootstrappedAdmin());
       allow list: if false;
@@ -220,6 +232,35 @@ service cloud.firestore {
             'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(vaultId) && isOwner(userId) && hasParentWorkspace(userId);
+      }
+
+      match /devices/{deviceId} {
+        allow get: if isValidId(userId) && isValidId(deviceId) && isOwner(userId) && hasParentWorkspace(userId);
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) &&
+          isValidId(deviceId) &&
+          isOwner(userId) &&
+          isValidDeviceSession(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().id == deviceId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentWorkspace(userId);
+        allow update: if isValidId(userId) &&
+          isValidId(deviceId) &&
+          isOwner(userId) &&
+          isValidDeviceSession(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentWorkspace(userId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'deviceName',
+            'platform',
+            'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(deviceId) && isOwner(userId) && hasParentWorkspace(userId);
       }
     }
   }

@@ -220,6 +220,49 @@
         }
       },
       "required": ["uid", "role", "createdAt", "updatedAt"]
+    },
+    "DeviceSession": {
+      "title": "DeviceSession",
+      "description": "Registered browser/device participating in real-time Firestore cloud sync.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the device owner."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique identifier of the device."
+        },
+        "deviceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Short non-PII device and browser label."
+        },
+        "platform": {
+          "type": "string",
+          "enum": ["desktop", "tablet", "mobile", "unknown"],
+          "description": "Device form factor."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when device first connected."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when device last synced."
+        }
+      },
+      "required": ["ownerId", "id", "deviceName", "platform", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -234,6 +277,10 @@
     "/users/{userId}/vaultData/{vaultId}": {
       "schema": { "$ref": "#/entities/EncryptedVaultDocument" },
       "description": "Zero-knowledge encrypted credential vault envelope per user."
+    },
+    "/users/{userId}/devices/{deviceId}": {
+      "schema": { "$ref": "#/entities/DeviceSession" },
+      "description": "Connected devices synced in real time for the user."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRegistration" },

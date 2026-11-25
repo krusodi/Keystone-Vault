@@ -116,3 +116,14 @@ export const DEFAULT_SETTINGS: VaultSettings = {
   theme: 'light',
   viewMode: 'grid',
 };
+
+export type DevicePlatform = 'desktop' | 'tablet' | 'mobile' | 'unknown';
+
+export interface SyncedDeviceInfo {
+  id: string;
+  deviceName: string;
+  platform: DevicePlatform;
+  createdAt: number;
+  updatedAt: number;
+}
+

@@ -302,6 +302,33 @@ export async function decryptVaultWithSession(
   throw new Error('เวอร์ชันไฟล์ Vault ไม่รองรับ');
 }
 
+export async function decryptEnvelopeWithDek(
+  envelope: EncryptedVaultEnvelopeV2,
+  dekBytes: Uint8Array
+): Promise<DecryptedVaultPayload> {
+  const dekKey = await importDekCryptoKey(dekBytes);
+  const ivBytes = fromBase64(envelope.iv);
+  const cipherBytes = fromBase64(envelope.ciphertext);
+
+  const decryptedBuffer = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: toArrayBuffer(ivBytes),
+    },
+    dekKey,
+    toArrayBuffer(cipherBytes)
+  );
+
+  const decoder = new TextDecoder();
+  const parsed = JSON.parse(decoder.decode(decryptedBuffer)) as DecryptedVaultPayload;
+
+  if (parsed.sentinel !== VAULT_SENTINEL || !Array.isArray(parsed.apps)) {
+    throw new Error('โครงสร้างข้อมูลหลังถอดรหัสไม่สมบูรณ์');
+  }
+
+  return parsed;
+}
+
 export interface PasswordStrength {
   score: 0 | 1 | 2 | 3 | 4;
   label: string;

@@ -8,6 +8,7 @@ import {
   EyeOff,
   KeyRound,
   LogOut,
+  Monitor,
   Pencil,
   Plus,
   RefreshCw,
@@ -15,6 +16,8 @@ import {
   Save,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
+  Tablet,
   Trash2,
   UserPlus,
   Users,
@@ -25,6 +28,7 @@ import {
   DEFAULT_SYSTEM_NAME,
   type AdminRole,
   type PublicAdminSummary,
+  type SyncedDeviceInfo,
 } from '../types/vault';
 import { useFirebase } from './FirebaseProvider';
 
@@ -54,6 +58,9 @@ interface SystemSettingsViewProps {
   onDeleteAdmin: (id: string) => Promise<void>;
   onOpenSecurityModal: () => void;
   onSyncNow: () => Promise<void>;
+  connectedDevices: SyncedDeviceInfo[];
+  currentDeviceId: string;
+  onRemoveDevice: (deviceId: string) => Promise<void>;
 }
 
 export function SystemSettingsView({
@@ -66,6 +73,9 @@ export function SystemSettingsView({
   onDeleteAdmin,
   onOpenSecurityModal,
   onSyncNow,
+  connectedDevices,
+  currentDeviceId,
+  onRemoveDevice,
 }: SystemSettingsViewProps) {
   const {
     user,
@@ -579,6 +589,66 @@ export function SystemSettingsView({
             </div>
           )}
         </div>
+
+        {user && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <span>อุปกรณ์ที่เชื่อมต่อแบบ Real-time ({connectedDevices.length})</span>
+              <span className="font-normal text-slate-500 dark:text-slate-400">
+                ซิงก์ทุกการเปลี่ยนแปลงอัตโนมัติ
+              </span>
+            </div>
+
+            {connectedDevices.length > 0 && (
+              <div className="divide-y divide-slate-200/80 dark:divide-slate-800 border border-slate-200/90 dark:border-slate-800 rounded-xl overflow-hidden">
+                {connectedDevices.map((dev) => {
+                  const isCurrent = dev.id === currentDeviceId;
+                  return (
+                    <div
+                      key={dev.id}
+                      className="px-3.5 py-2.5 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-sky-50 dark:bg-sky-950/40 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+                          {dev.platform === 'mobile' ? (
+                            <Smartphone className="w-4 h-4" />
+                          ) : dev.platform === 'tablet' ? (
+                            <Tablet className="w-4 h-4" />
+                          ) : (
+                            <Monitor className="w-4 h-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            {dev.deviceName}
+                            {isCurrent && (
+                              <span className="ml-2 text-emerald-600 dark:text-emerald-400 font-medium">
+                                · อุปกรณ์นี้
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400 tabular-nums">
+                            เชื่อมต่อเมื่อ {new Date(dev.updatedAt).toLocaleString('th-TH')}
+                          </div>
+                        </div>
+                      </div>
+
+                      {!isCurrent && (
+                        <button
+                          type="button"
+                          onClick={() => onRemoveDevice(dev.id)}
+                          className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+                        >
+                          นำออก
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Add / Edit Admin Modal */}

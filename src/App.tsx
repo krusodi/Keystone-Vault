@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  Cloud,
   Copy,
   ExternalLink,
   Eye,
@@ -35,6 +36,7 @@ import { VaultGatePanel } from './components/VaultGatePanel';
 import { getCategoryTheme } from './lib/categoryTheme';
 import {
   createAdminKeySlot,
+  decryptEnvelopeWithDek,
   decryptVaultWithSession,
   encryptVaultWithDek,
   generateVaultDek,
@@ -43,10 +45,14 @@ import {
 } from './lib/crypto';
 import {
   fetchCloudWorkspaceState,
+  getLocalDeviceIdentity,
+  registerConnectedDevice,
+  removeConnectedDevice,
   saveCloudSystemName,
   saveEncryptedVaultToFirestore,
   subscribeCloudWorkspace,
   syncPublicAppsToFirestore,
+  updatePublicAppLastUsedInFirestore,
 } from './lib/firebaseSync';
 import { createSampleApps } from './lib/sampleApps';
 import {
@@ -71,8 +77,10 @@ import {
   type AppItem,
   type DecryptedVaultPayload,
   type EncryptedVaultEnvelope,
+  type EncryptedVaultEnvelopeV2,
   type LogoType,
   type PublicAppEntry,
+  type SyncedDeviceInfo,
   type VaultSettings,
 } from './types/vault';
 
@@ -120,7 +128,7 @@ function loadInitialTheme(): 'light' | 'dark' {
 }
 
 export default function App() {
-  const { authReady, user: firebaseUser, setSyncStatus } = useFirebase();
+  const { authReady, user: firebaseUser, signInWithGoogle, setSyncStatus } = useFirebase();
 
   const [publicApps, setPublicApps] = useState<PublicAppEntry[]>(() =>
     loadInitialPublicApps()
@@ -128,6 +136,8 @@ export default function App() {
   const [envelope, setEnvelope] = useState<EncryptedVaultEnvelope | null>(() =>
     loadStoredEnvelope()
   );
+  const [connectedDevices, setConnectedDevices] = useState<SyncedDeviceInfo[]>([]);
+  const currentDeviceId = useMemo(() => getLocalDeviceIdentity().id, []);
 
   const [systemName, setSystemName] = useState<string>(() => loadSystemName());
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -147,6 +157,8 @@ export default function App() {
   const envelopeRef = useRef(envelope);
   const publicAppsRef = useRef(publicApps);
   const systemNameRef = useRef(systemName);
+  const isUnlockedRef = useRef(isUnlocked);
+  const activeAdminIdRef = useRef(activeAdminId);
 
   useEffect(() => {
     envelopeRef.current = envelope;
@@ -159,6 +171,14 @@ export default function App() {
   useEffect(() => {
     systemNameRef.current = systemName;
   }, [systemName]);
+
+  useEffect(() => {
+    isUnlockedRef.current = isUnlocked;
+  }, [isUnlocked]);
+
+  useEffect(() => {
+    activeAdminIdRef.current = activeAdminId;
+  }, [activeAdminId]);
 
   const [navFilter, setNavFilter] = useState<NavFilter>({ type: 'home' });
   const [showAuthGate, setShowAuthGate] = useState(false);
@@ -177,6 +197,69 @@ export default function App() {
   const [clipboardNotice, setClipboardNotice] = useState<ClipboardNotice | null>(null);
   const [idleSecondsLeft, setIdleSecondsLeft] = useState<number | null>(null);
 
+  const lockVault = useCallback(() => {
+    if (dekRef.current) {
+      dekRef.current.fill(0);
+      dekRef.current = null;
+    }
+    pendingActionRef.current = null;
+    isUnlockedRef.current = false;
+    activeAdminIdRef.current = null;
+    setActiveAdminId(null);
+    setVaultApps([]);
+    setCustomCategories([]);
+    setIsUnlocked(false);
+    setShowAuthGate(false);
+    setNavFilter({ type: 'home' });
+    setDetailApp(null);
+    setEditingApp(null);
+    setPendingDeleteApp(null);
+    setFormModalOpen(false);
+    setSettingsModalOpen(false);
+    setIdleSecondsLeft(null);
+  }, []);
+
+  const applyRemoteEncryptedEnvelope = useCallback(
+    async (cloudEnv: EncryptedVaultEnvelopeV2) => {
+      const activeDek = dekRef.current;
+      if (!isUnlockedRef.current || !activeDek) return;
+
+      const currentAdmin = activeAdminIdRef.current;
+      if (
+        currentAdmin &&
+        !cloudEnv.keySlots.some((slot) => slot.id === currentAdmin)
+      ) {
+        lockVault();
+        return;
+      }
+
+      try {
+        const payload = await decryptEnvelopeWithDek(cloudEnv, activeDek);
+        const sorted = [...payload.apps].sort((a, b) => a.sort_order - b.sort_order);
+        const resolvedSystemName = saveSystemName(
+          payload.settings?.systemName || systemNameRef.current || DEFAULT_SYSTEM_NAME
+        );
+
+        setVaultApps(sorted);
+        setCustomCategories(payload.customCategories ?? []);
+        setSystemName(resolvedSystemName);
+        setSettings((prev) => ({
+          ...DEFAULT_SETTINGS,
+          ...payload.settings,
+          theme: payload.settings?.theme ?? prev.theme,
+          systemName: resolvedSystemName,
+        }));
+
+        const nextPublic = sorted.map(toPublicAppEntry);
+        savePublicApps(nextPublic);
+        setPublicApps(nextPublic);
+      } catch {
+        lockVault();
+      }
+    },
+    [lockVault]
+  );
+
   // Sync browser document title with systemName
   useEffect(() => {
     document.title = systemName;
@@ -184,7 +267,10 @@ export default function App() {
 
   // Connect Firestore real-time cloud sync when Google Firebase user is authenticated
   useEffect(() => {
-    if (!authReady || !firebaseUser) return;
+    if (!authReady || !firebaseUser) {
+      setConnectedDevices([]);
+      return;
+    }
     if (!firebaseUser.emailVerified) {
       setSyncStatus('error', 'บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล');
       return;
@@ -196,12 +282,16 @@ export default function App() {
     async function initCloudSync(uid: string) {
       setSyncStatus('syncing');
       try {
+        await registerConnectedDevice(uid, systemNameRef.current);
+        if (cancelled) return;
+
         const cloud = await fetchCloudWorkspaceState(uid, systemNameRef.current);
         if (cancelled) return;
 
         if (cloud.systemName) {
           const cleaned = saveSystemName(cloud.systemName);
           setSystemName(cleaned);
+          setSettings((prev) => ({ ...prev, systemName: cleaned }));
         }
 
         const localEnv = envelopeRef.current;
@@ -210,12 +300,20 @@ export default function App() {
           (!localEnv || cloud.envelope.updatedAt > localEnv.updatedAt)
         ) {
           saveStoredEnvelope(cloud.envelope);
+          envelopeRef.current = cloud.envelope;
           setEnvelope(cloud.envelope);
+          if (isUnlockedRef.current && dekRef.current) {
+            await applyRemoteEncryptedEnvelope(cloud.envelope);
+          }
         } else if (localEnv && localEnv.version === 2) {
           await saveEncryptedVaultToFirestore(uid, localEnv, systemNameRef.current);
         }
 
-        if (cloud.publicApps && !localEnv) {
+        if (
+          cloud.publicApps &&
+          (!localEnv ||
+            (cloud.envelope && cloud.envelope.updatedAt >= localEnv.updatedAt))
+        ) {
           savePublicApps(cloud.publicApps);
           setPublicApps(cloud.publicApps);
         } else if (!cloud.publicApps && publicAppsRef.current.length > 0) {
@@ -233,6 +331,7 @@ export default function App() {
           onSystemName: (cloudName) => {
             const cleaned = saveSystemName(cloudName);
             setSystemName(cleaned);
+            setSettings((prev) => ({ ...prev, systemName: cleaned }));
           },
           onPublicApps: (cloudApps) => {
             savePublicApps(cloudApps);
@@ -242,8 +341,15 @@ export default function App() {
             const curr = envelopeRef.current;
             if (!curr || cloudEnv.updatedAt > curr.updatedAt) {
               saveStoredEnvelope(cloudEnv);
+              envelopeRef.current = cloudEnv;
               setEnvelope(cloudEnv);
+              if (isUnlockedRef.current && dekRef.current) {
+                void applyRemoteEncryptedEnvelope(cloudEnv);
+              }
             }
+          },
+          onDevices: (devices) => {
+            setConnectedDevices(devices);
           },
           onError: (err) => {
             const msg = err.message.includes('Quota exceeded')
@@ -269,7 +375,7 @@ export default function App() {
       cancelled = true;
       if (unsubscribe) unsubscribe();
     };
-  }, [authReady, firebaseUser, setSyncStatus]);
+  }, [authReady, firebaseUser, setSyncStatus, applyRemoteEncryptedEnvelope]);
 
   // Sync theme on <html> element & theme pref
   useEffect(() => {
@@ -285,26 +391,6 @@ export default function App() {
       // ignore
     }
   }, [settings.theme]);
-
-  const lockVault = useCallback(() => {
-    if (dekRef.current) {
-      dekRef.current.fill(0);
-      dekRef.current = null;
-    }
-    pendingActionRef.current = null;
-    setActiveAdminId(null);
-    setVaultApps([]);
-    setCustomCategories([]);
-    setIsUnlocked(false);
-    setShowAuthGate(false);
-    setNavFilter({ type: 'home' });
-    setDetailApp(null);
-    setEditingApp(null);
-    setPendingDeleteApp(null);
-    setFormModalOpen(false);
-    setSettingsModalOpen(false);
-    setIdleSecondsLeft(null);
-  }, []);
 
   const persistEncryptedVault = useCallback(
     async (
@@ -335,6 +421,7 @@ export default function App() {
 
       const nextEnvelope = await encryptVaultWithDek(payload, dek, keySlots);
       saveStoredEnvelope(nextEnvelope);
+      envelopeRef.current = nextEnvelope;
       setEnvelope(nextEnvelope);
 
       const nextPublic = nextApps.map(toPublicAppEntry);
@@ -492,6 +579,8 @@ export default function App() {
       newDek
     );
     dekRef.current = newDek;
+    activeAdminIdRef.current = initialSlot.id;
+    isUnlockedRef.current = true;
     setActiveAdminId(initialSlot.id);
     lastActivityRef.current = Date.now();
     setVaultApps(initialVaultApps);
@@ -512,6 +601,7 @@ export default function App() {
 
     if (res.wasMigratedFromV1) {
       saveStoredEnvelope(res.envelope);
+      envelopeRef.current = res.envelope;
       setEnvelope(res.envelope);
     }
 
@@ -521,6 +611,8 @@ export default function App() {
     setSystemName(resolvedSystemName);
 
     dekRef.current = res.dekBytes;
+    activeAdminIdRef.current = res.activeAdminId;
+    isUnlockedRef.current = true;
     setActiveAdminId(res.activeAdminId);
     lastActivityRef.current = Date.now();
     setVaultApps(sorted);
@@ -537,6 +629,15 @@ export default function App() {
     const nextPublic = sorted.map(toPublicAppEntry);
     savePublicApps(nextPublic);
     setPublicApps(nextPublic);
+
+    if (res.wasMigratedFromV1 && firebaseUser && firebaseUser.emailVerified) {
+      saveEncryptedVaultToFirestore(firebaseUser.uid, res.envelope, resolvedSystemName).catch(
+        () => {}
+      );
+      syncPublicAppsToFirestore(firebaseUser.uid, nextPublic, resolvedSystemName).catch(
+        () => {}
+      );
+    }
 
     fulfillPendingAction();
   }
@@ -550,6 +651,7 @@ export default function App() {
     const sorted = [...res.payload.apps].sort((a, b) => a.sort_order - b.sort_order);
 
     saveStoredEnvelope(res.envelope);
+    envelopeRef.current = res.envelope;
     setEnvelope(res.envelope);
 
     const resolvedSystemName = saveSystemName(
@@ -558,6 +660,8 @@ export default function App() {
     setSystemName(resolvedSystemName);
 
     dekRef.current = res.dekBytes;
+    activeAdminIdRef.current = res.activeAdminId;
+    isUnlockedRef.current = true;
     setActiveAdminId(res.activeAdminId);
     lastActivityRef.current = Date.now();
     setVaultApps(sorted);
@@ -574,6 +678,15 @@ export default function App() {
     const nextPublic = sorted.map(toPublicAppEntry);
     savePublicApps(nextPublic);
     setPublicApps(nextPublic);
+
+    if (firebaseUser && firebaseUser.emailVerified) {
+      saveEncryptedVaultToFirestore(firebaseUser.uid, res.envelope, resolvedSystemName).catch(
+        () => {}
+      );
+      syncPublicAppsToFirestore(firebaseUser.uid, nextPublic, resolvedSystemName).catch(
+        () => {}
+      );
+    }
 
     fulfillPendingAction();
   }
@@ -693,6 +806,8 @@ export default function App() {
       );
       setVaultApps(nextVault);
       persistEncryptedVault(nextVault, customCategories, settings).catch(() => {});
+    } else if (firebaseUser && firebaseUser.emailVerified) {
+      updatePublicAppLastUsedInFirestore(firebaseUser.uid, app.id, now).catch(() => {});
     }
   }
 
@@ -771,6 +886,7 @@ export default function App() {
     if (!firebaseUser || !firebaseUser.emailVerified) return;
     setSyncStatus('syncing');
     try {
+      await registerConnectedDevice(firebaseUser.uid, systemName);
       await saveCloudSystemName(firebaseUser.uid, systemName);
       await syncPublicAppsToFirestore(firebaseUser.uid, publicApps, systemName);
       if (envelope && envelope.version === 2) {
@@ -785,6 +901,26 @@ export default function App() {
           ? 'โควตาการใช้งาน Firestore วันนี้เต็มแล้ว'
           : 'ซิงก์ข้อมูลขึ้น Firebase ไม่สำเร็จ'
       );
+    }
+  }
+
+  async function handleRemoveDevice(deviceId: string) {
+    if (!firebaseUser || !firebaseUser.emailVerified) return;
+    await removeConnectedDevice(firebaseUser.uid, deviceId);
+  }
+
+  async function handleQuickCloudAction() {
+    if (!firebaseUser) {
+      await signInWithGoogle();
+      return;
+    }
+    if (isUnlocked) {
+      setNavFilter({ type: 'system' });
+      setShowAuthGate(false);
+      setMobileMenuOpen(false);
+    } else {
+      setShowAuthGate(true);
+      setMobileMenuOpen(false);
     }
   }
 
@@ -1146,8 +1282,18 @@ export default function App() {
             )}
           </nav>
 
-          {/* Zone 3: Theme Toggle + Vault Auth Action */}
+          {/* Zone 3: Cloud Sync + Theme Toggle + Vault Auth Action */}
           <div className={`${isUnlocked ? 'hidden xl:flex' : 'hidden md:flex'} items-center gap-2.5 shrink-0`}>
+            <button
+              type="button"
+              onClick={handleQuickCloudAction}
+              title="เชื่อมต่อทุกอุปกรณ์แบบ Real-time (Firebase)"
+              className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-sky-200 dark:border-sky-800/70 bg-sky-50/70 dark:bg-sky-950/30 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-100/80 dark:hover:bg-sky-950/60 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+            >
+              <Cloud className="w-3.5 h-3.5" />
+              <span>{firebaseUser ? 'ซิงก์ทุกอุปกรณ์' : 'เชื่อมต่อทุกอุปกรณ์'}</span>
+            </button>
+
             {isUnlocked && (
               <button
                 type="button"
@@ -1360,6 +1506,19 @@ export default function App() {
                 <span>เข้าสู่ระบบคลังรหัส</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={handleQuickCloudAction}
+              className="w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950/40"
+            >
+              <Cloud className="w-4 h-4" />
+              <span>
+                {firebaseUser
+                  ? 'ซิงก์ทุกอุปกรณ์แบบ Real-time'
+                  : 'เชื่อมต่อทุกอุปกรณ์ (Firebase)'}
+              </span>
+            </button>
           </div>
         )}
       </header>
@@ -1507,6 +1666,9 @@ export default function App() {
               onDeleteAdmin={handleDeleteAdmin}
               onOpenSecurityModal={() => setSettingsModalOpen(true)}
               onSyncNow={handleManualCloudSync}
+              connectedDevices={connectedDevices}
+              currentDeviceId={currentDeviceId}
+              onRemoveDevice={handleRemoveDevice}
             />
           ) : navFilter.type === 'home' ? (
             filteredHomeApps.length === 0 ? (

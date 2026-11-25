@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -16,12 +17,15 @@ import {
 import {
   DEFAULT_SYSTEM_NAME,
   type AdminKeySlot,
+  type DevicePlatform,
   type EncryptedVaultEnvelopeV2,
   type LogoType,
   type PublicAppEntry,
+  type SyncedDeviceInfo,
 } from '../types/vault';
 import { db, handleFirestoreError, OperationType } from './firebase';
 
+const DEVICE_ID_STORAGE_KEY = 'keystone_device_id_v1';
 const VALID_ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
 const VALID_LOGO_TYPES = new Set<LogoType>(['upload', 'url', 'favicon', 'preset_icon']);
 
@@ -94,6 +98,53 @@ function toEpochMs(val: unknown, fallback: number): number {
   if (val instanceof Timestamp) return val.toMillis();
   if (typeof val === 'number' && Number.isFinite(val)) return val;
   return fallback;
+}
+
+export function getLocalDeviceIdentity(): {
+  id: string;
+  deviceName: string;
+  platform: DevicePlatform;
+} {
+  let id = '';
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+    if (existing && VALID_ID_REGEX.test(existing) && existing.length <= 128) {
+      id = existing;
+    } else {
+      id = crypto.randomUUID();
+      localStorage.setItem(DEVICE_ID_STORAGE_KEY, id);
+    }
+  } catch {
+    id = crypto.randomUUID();
+  }
+
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const isTablet = /iPad|Tablet|PlayBook|Silk/i.test(ua) || (/Android/i.test(ua) && !/Mobile/i.test(ua));
+  const isMobile = /iPhone|iPod|Android.*Mobile|Windows Phone|BlackBerry/i.test(ua);
+  const platform: DevicePlatform = isTablet
+    ? 'tablet'
+    : isMobile
+      ? 'mobile'
+      : 'desktop';
+
+  let osLabel = 'อุปกรณ์';
+  if (/iPhone|iPad|iPod/i.test(ua)) osLabel = 'iOS';
+  else if (/Android/i.test(ua)) osLabel = 'Android';
+  else if (/Mac OS X|Macintosh/i.test(ua)) osLabel = 'macOS';
+  else if (/Windows/i.test(ua)) osLabel = 'Windows';
+  else if (/Linux/i.test(ua)) osLabel = 'Linux';
+
+  let browserLabel = 'Browser';
+  if (/Edg\//i.test(ua)) browserLabel = 'Edge';
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browserLabel = 'Chrome';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browserLabel = 'Safari';
+  else if (/Firefox\//i.test(ua)) browserLabel = 'Firefox';
+
+  const prefix =
+    platform === 'mobile' ? 'Mobile' : platform === 'tablet' ? 'Tablet' : 'Desktop';
+  const deviceName = `${prefix} · ${osLabel} (${browserLabel})`.slice(0, 80);
+
+  return { id, deviceName, platform };
 }
 
 export async function ensureUserWorkspace(
@@ -217,6 +268,91 @@ export async function syncPublicAppsToFirestore(
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, colPath);
+  }
+}
+
+export async function updatePublicAppLastUsedInFirestore(
+  uid: string,
+  appId: string,
+  lastUsedAt: number
+): Promise<void> {
+  const cleanId = sanitizeDocId(appId);
+  const path = `users/${uid}/publicApps/${cleanId}`;
+  const ref = doc(db, 'users', uid, 'publicApps', cleanId);
+
+  let snap;
+  try {
+    snap = await getDoc(ref);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  if (!snap.exists()) return;
+
+  try {
+    await updateDoc(ref, {
+      lastUsedAt: Math.max(0, Math.trunc(lastUsedAt)),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function registerConnectedDevice(
+  uid: string,
+  systemName: string
+): Promise<string> {
+  await ensureUserWorkspace(uid, systemName);
+  const device = getLocalDeviceIdentity();
+  const path = `users/${uid}/devices/${device.id}`;
+  const ref = doc(db, 'users', uid, 'devices', device.id);
+
+  let snap;
+  try {
+    snap = await getDoc(ref);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  if (snap.exists()) {
+    try {
+      await updateDoc(ref, {
+        deviceName: device.deviceName,
+        platform: device.platform,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  } else {
+    try {
+      await setDoc(ref, {
+        ownerId: uid,
+        id: device.id,
+        deviceName: device.deviceName,
+        platform: device.platform,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, path);
+    }
+  }
+
+  return device.id;
+}
+
+export async function removeConnectedDevice(
+  uid: string,
+  deviceId: string
+): Promise<void> {
+  const cleanId = sanitizeDocId(deviceId);
+  const path = `users/${uid}/devices/${cleanId}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'devices', cleanId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
@@ -374,6 +510,7 @@ export function subscribeCloudWorkspace(
     onSystemName: (name: string) => void;
     onPublicApps: (apps: PublicAppEntry[]) => void;
     onEnvelope: (envelope: EncryptedVaultEnvelopeV2) => void;
+    onDevices: (devices: SyncedDeviceInfo[]) => void;
     onError: (err: Error) => void;
   }
 ): Unsubscribe {
@@ -405,7 +542,6 @@ export function subscribeCloudWorkspace(
   const unsubApps = onSnapshot(
     appsQuery,
     (snap) => {
-      if (snap.empty) return;
       const now = Date.now();
       const apps: PublicAppEntry[] = snap.docs
         .map((d) => {
@@ -475,9 +611,51 @@ export function subscribeCloudWorkspace(
     }
   );
 
+  const devicesPath = `users/${uid}/devices`;
+  const devicesQuery = query(
+    collection(db, 'users', uid, 'devices'),
+    where('ownerId', '==', uid)
+  );
+  const unsubDevices = onSnapshot(
+    devicesQuery,
+    (snap) => {
+      const now = Date.now();
+      const validPlatforms = new Set<DevicePlatform>([
+        'desktop',
+        'tablet',
+        'mobile',
+        'unknown',
+      ]);
+      const list: SyncedDeviceInfo[] = snap.docs
+        .map((d) => {
+          const data = d.data();
+          const p = validPlatforms.has(data.platform as DevicePlatform)
+            ? (data.platform as DevicePlatform)
+            : 'unknown';
+          return {
+            id: String(data.id ?? d.id),
+            deviceName: String(data.deviceName ?? 'อุปกรณ์'),
+            platform: p,
+            createdAt: toEpochMs(data.createdAt, now),
+            updatedAt: toEpochMs(data.updatedAt, now),
+          };
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      callbacks.onDevices(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, devicesPath);
+      } catch (e) {
+        callbacks.onError(e instanceof Error ? e : new Error(String(e)));
+      }
+    }
+  );
+
   return () => {
     unsubUser();
     unsubApps();
     unsubVault();
+    unsubDevices();
   };
 }
