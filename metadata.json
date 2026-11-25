@@ -1,0 +1,6 @@
+{
+  "name": "Keystone Vault — Zero-Knowledge App Launcher",
+  "description": "โปรแกรมรวมแอปที่ใช้บ่อยพร้อมระบบจัดการโลโก้ ลิงก์/Deep Link และคลังรหัสผ่านเข้ารหัส AES-256-GCM แบบ Zero-Knowledge",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

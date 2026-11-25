@@ -1,0 +1,243 @@
+{
+  "entities": {
+    "UserWorkspace": {
+      "title": "UserWorkspace",
+      "description": "Per-user workspace branding and non-PII configuration synchronized with Keystone Vault.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the workspace owner."
+        },
+        "systemName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Custom display name for the application header and title."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when workspace was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when workspace was last updated."
+        }
+      },
+      "required": ["uid", "systemName", "createdAt", "updatedAt"]
+    },
+    "PublicAppDocument": {
+      "title": "PublicAppDocument",
+      "description": "Non-sensitive app launcher entry (logo, name, target URL, category) shown on the Home launcher.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the app owner."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique identifier of the app entry."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name of the application."
+        },
+        "logo_type": {
+          "type": "string",
+          "enum": ["upload", "url", "favicon", "preset_icon"],
+          "description": "Source type for the app icon or logo."
+        },
+        "logo_value": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 200000,
+          "description": "Logo URL, preset key, or rasterized data URL."
+        },
+        "target_url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Validated HTTP/HTTPS URL or deep link."
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Category label."
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "Zero-based display sort order."
+        },
+        "is_favorite": {
+          "type": "boolean",
+          "description": "Whether the app is pinned as favorite."
+        },
+        "lastUsedAt": {
+          "type": "integer",
+          "description": "Optional epoch milliseconds when app was last launched."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when entry was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when entry was updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "id",
+        "name",
+        "logo_type",
+        "logo_value",
+        "target_url",
+        "category",
+        "sort_order",
+        "is_favorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EncryptedVaultDocument": {
+      "title": "EncryptedVaultDocument",
+      "description": "Zero-knowledge AES-256-GCM encrypted vault envelope with PBKDF2-SHA256 admin key slots.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the vault owner."
+        },
+        "version": {
+          "type": "integer",
+          "description": "Envelope schema version (2)."
+        },
+        "kdf": {
+          "type": "string",
+          "enum": ["PBKDF2-SHA256"],
+          "description": "Key derivation function algorithm."
+        },
+        "iterations": {
+          "type": "integer",
+          "description": "PBKDF2 iteration count."
+        },
+        "cipher": {
+          "type": "string",
+          "enum": ["AES-256-GCM"],
+          "description": "Symmetric cipher algorithm."
+        },
+        "iv": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Base64 initialization vector."
+        },
+        "ciphertext": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 850000,
+          "description": "Base64 AES-256-GCM encrypted vault payload."
+        },
+        "keySlots": {
+          "type": "array",
+          "description": "Bounded list (1-20) of per-admin wrapped DEK slots."
+        },
+        "clientUpdatedAt": {
+          "type": "integer",
+          "description": "Client-recorded epoch ms of last encryption."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when vault was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when vault was updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "version",
+        "kdf",
+        "iterations",
+        "cipher",
+        "iv",
+        "ciphertext",
+        "keySlots",
+        "clientUpdatedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRegistration": {
+      "title": "AdminRegistration",
+      "description": "Explicitly authorized cloud admin account record managed by the bootstrapped super admin.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID granted admin role."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "description": "Assigned role."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin entry was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin entry was updated."
+        }
+      },
+      "required": ["uid", "role", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserWorkspace" },
+      "description": "User workspace branding document (systemName)."
+    },
+    "/users/{userId}/publicApps/{appId}": {
+      "schema": { "$ref": "#/entities/PublicAppDocument" },
+      "description": "Public launcher app metadata per user (without credentials)."
+    },
+    "/users/{userId}/vaultData/{vaultId}": {
+      "schema": { "$ref": "#/entities/EncryptedVaultDocument" },
+      "description": "Zero-knowledge encrypted credential vault envelope per user."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRegistration" },
+      "description": "Cloud-level admin allowlist managed exclusively by the bootstrapped admin."
+    }
+  }
+}

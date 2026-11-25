@@ -1,0 +1,226 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'krusodi.ns@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'krusodi.ns@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function hasParentWorkspace(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+        get(/databases/$(database)/documents/users/$(userId)).data.uid == userId;
+    }
+
+    function isValidUserWorkspace(data) {
+      return data is map &&
+        data.keys().hasAll(['uid', 'systemName', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'systemName', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.systemName is string && data.systemName.size() >= 1 && data.systemName.size() <= 40 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPublicApp(data) {
+      return data is map &&
+        data.keys().hasAll(['ownerId', 'id', 'name', 'logo_type', 'logo_value', 'target_url', 'category', 'sort_order', 'is_favorite', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'id', 'name', 'logo_type', 'logo_value', 'target_url', 'category', 'sort_order', 'is_favorite', 'lastUsedAt', 'createdAt', 'updatedAt']) &&
+        isValidId(data.ownerId) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.logo_type is string && data.logo_type in ['upload', 'url', 'favicon', 'preset_icon'] &&
+        data.logo_value is string && data.logo_value.size() <= 200000 &&
+        data.target_url is string && data.target_url.size() >= 1 && data.target_url.size() <= 2048 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        data.sort_order is int && data.sort_order >= 0 && data.sort_order <= 10000 &&
+        data.is_favorite is bool &&
+        (!('lastUsedAt' in data) || (data.lastUsedAt is int && data.lastUsedAt >= 0)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidKeySlot(slot) {
+      return slot is map &&
+        slot.keys().hasAll(['id', 'username', 'displayName', 'role', 'salt', 'iv', 'wrappedDek', 'createdAt', 'updatedAt']) &&
+        slot.keys().hasOnly(['id', 'username', 'displayName', 'role', 'salt', 'iv', 'wrappedDek', 'createdAt', 'updatedAt']) &&
+        isValidId(slot.id) &&
+        slot.username is string && slot.username.size() >= 1 && slot.username.size() <= 64 &&
+        slot.displayName is string && slot.displayName.size() >= 1 && slot.displayName.size() <= 80 &&
+        slot.role is string && slot.role in ['super_admin', 'admin'] &&
+        slot.salt is string && slot.salt.size() >= 1 && slot.salt.size() <= 128 &&
+        slot.iv is string && slot.iv.size() >= 1 && slot.iv.size() <= 64 &&
+        slot.wrappedDek is string && slot.wrappedDek.size() >= 1 && slot.wrappedDek.size() <= 256 &&
+        slot.createdAt is int && slot.createdAt >= 0 &&
+        slot.updatedAt is int && slot.updatedAt >= 0;
+    }
+
+    function isValidEncryptedVault(data) {
+      return data is map &&
+        data.keys().hasAll(['ownerId', 'version', 'kdf', 'iterations', 'cipher', 'iv', 'ciphertext', 'keySlots', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'version', 'kdf', 'iterations', 'cipher', 'iv', 'ciphertext', 'keySlots', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+        isValidId(data.ownerId) &&
+        data.version == 2 &&
+        data.kdf == 'PBKDF2-SHA256' &&
+        data.iterations is int && data.iterations >= 100000 && data.iterations <= 2000000 &&
+        data.cipher == 'AES-256-GCM' &&
+        data.iv is string && data.iv.size() >= 1 && data.iv.size() <= 64 &&
+        data.ciphertext is string && data.ciphertext.size() >= 1 && data.ciphertext.size() <= 850000 &&
+        data.keySlots is list && data.keySlots.size() >= 1 && data.keySlots.size() <= 20 &&
+        isValidKeySlot(data.keySlots[0]) &&
+        data.clientUpdatedAt is int && data.clientUpdatedAt >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRegistration(data) {
+      return data is map &&
+        data.keys().hasAll(['uid', 'role', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'role', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.role == 'admin' &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isBootstrappedAdmin());
+      allow list: if false;
+      allow create: if isValidId(adminId) &&
+        isValidAdminRegistration(incoming()) &&
+        isBootstrappedAdmin() &&
+        incoming().uid == adminId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(adminId) &&
+        isValidAdminRegistration(incoming()) &&
+        isBootstrappedAdmin() &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt']);
+      allow delete: if isValidId(adminId) && isBootstrappedAdmin();
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserWorkspace(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) &&
+        isValidUserWorkspace(incoming()) &&
+        (isOwner(userId) || isAdmin()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['systemName', 'updatedAt']);
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+
+      match /publicApps/{appId} {
+        allow get: if isValidId(userId) && isValidId(appId) && isOwner(userId) && hasParentWorkspace(userId);
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) &&
+          isValidId(appId) &&
+          isOwner(userId) &&
+          isValidPublicApp(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().id == appId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentWorkspace(userId);
+        allow update: if isValidId(userId) &&
+          isValidId(appId) &&
+          isOwner(userId) &&
+          isValidPublicApp(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentWorkspace(userId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'logo_type',
+            'logo_value',
+            'target_url',
+            'category',
+            'sort_order',
+            'is_favorite',
+            'lastUsedAt',
+            'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(appId) && isOwner(userId) && hasParentWorkspace(userId);
+      }
+
+      match /vaultData/{vaultId} {
+        allow get: if isValidId(userId) && isValidId(vaultId) && isOwner(userId) && hasParentWorkspace(userId);
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) &&
+          isValidId(vaultId) &&
+          isOwner(userId) &&
+          isValidEncryptedVault(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasParentWorkspace(userId);
+        allow update: if isValidId(userId) &&
+          isValidId(vaultId) &&
+          isOwner(userId) &&
+          isValidEncryptedVault(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasParentWorkspace(userId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'version',
+            'kdf',
+            'iterations',
+            'cipher',
+            'iv',
+            'ciphertext',
+            'keySlots',
+            'clientUpdatedAt',
+            'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(vaultId) && isOwner(userId) && hasParentWorkspace(userId);
+      }
+    }
+  }
+}
