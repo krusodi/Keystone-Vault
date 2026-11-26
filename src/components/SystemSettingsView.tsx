@@ -26,6 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { evaluatePasswordStrength, generateSecurePassword } from '../lib/crypto';
+import { parseWorkspaceInviteInput } from '../lib/firebaseSync';
 import {
   DEFAULT_SYSTEM_NAME,
   type AdminRole,
@@ -102,6 +103,7 @@ export function SystemSettingsView({
     projectId,
     isSigningIn,
     authError,
+    unauthorizedDomain,
     syncState,
     syncError,
     lastSyncedAt,
@@ -112,7 +114,6 @@ export function SystemSettingsView({
   const [creatingInvite, setCreatingInvite] = useState(false);
   const [inviteCopyNotice, setInviteCopyNotice] = useState<string | null>(null);
   const [joinFormOpen, setJoinFormOpen] = useState(false);
-  const [joinWsInput, setJoinWsInput] = useState('main');
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [joiningWs, setJoiningWs] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -608,9 +609,40 @@ export function SystemSettingsView({
           )}
 
           {(authError || syncError) && (
-            <div className="flex items-start gap-2 text-rose-600 dark:text-rose-400 pt-1">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{authError || syncError}</span>
+            <div className="space-y-2 text-rose-600 dark:text-rose-400 pt-1">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{authError || syncError}</span>
+              </div>
+              {unauthorizedDomain && (
+                <div className="flex flex-wrap items-center gap-2 pl-6">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void navigator.clipboard?.writeText(unauthorizedDomain)
+                    }
+                    className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-mono hover:bg-rose-100/60 cursor-pointer"
+                  >
+                    คัดลอกโดเมน: {unauthorizedDomain}
+                  </button>
+                  <a
+                    href={`https://console.firebase.google.com/project/${projectId}/authentication/settings`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                  >
+                    เปิด Firebase Console → Authorized domains
+                  </a>
+                  <button
+                    type="button"
+                    disabled={isSigningIn}
+                    onClick={() => void signInWithGoogle()}
+                    className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-semibold hover:bg-rose-100/60 cursor-pointer disabled:opacity-60"
+                  >
+                    ลองเชื่อมต่อใหม่
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -732,13 +764,14 @@ export function SystemSettingsView({
                   onSubmit={async (e) => {
                     e.preventDefault();
                     setJoinError(null);
-                    if (!joinCodeInput.trim()) {
-                      setJoinError('กรุณากรอกรหัสเชื่อมต่อ');
+                    const parsed = parseWorkspaceInviteInput(joinCodeInput);
+                    if (!parsed.inviteCode) {
+                      setJoinError('กรุณาวางลิงก์เชิญ หรือกรอกรหัสเชื่อมต่อ');
                       return;
                     }
                     setJoiningWs(true);
                     try {
-                      await onJoinWorkspace(joinWsInput.trim() || 'main', joinCodeInput.trim());
+                      await onJoinWorkspace(parsed.workspaceId, parsed.inviteCode);
                       setJoinCodeInput('');
                       setJoinFormOpen(false);
                     } catch (err) {
@@ -749,34 +782,25 @@ export function SystemSettingsView({
                   }}
                   className="pt-2 border-t border-sky-200/70 dark:border-sky-900/50 space-y-2.5"
                 >
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <input
-                      type="text"
-                      value={joinWsInput}
-                      onChange={(e) => setJoinWsInput(e.target.value)}
-                      placeholder="รหัสฐานข้อมูล (เช่น main)"
-                      className="h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100"
-                    />
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="text"
                       value={joinCodeInput}
                       onChange={(e) => setJoinCodeInput(e.target.value)}
-                      placeholder="รหัสเชิญ (เช่น KV-XXXX-XXXX-XXXX)"
-                      className="h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100"
+                      placeholder="วางลิงก์เชิญ หรือรหัสเชื่อมต่อ เช่น KV-XXXX-XXXX-XXXX"
+                      className="flex-1 h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100"
                     />
-                  </div>
-                  {joinError && (
-                    <p className="text-xs text-rose-600 dark:text-rose-400">{joinError}</p>
-                  )}
-                  <div className="flex justify-end gap-2">
                     <button
                       type="submit"
                       disabled={joiningWs}
-                      className="h-8 px-3.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+                      className="h-9 px-3.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 whitespace-nowrap"
                     >
                       {joiningWs ? 'กำลังเชื่อมต่อ...' : 'เข้าร่วมฐานข้อมูล'}
                     </button>
                   </div>
+                  {joinError && (
+                    <p className="text-xs text-rose-600 dark:text-rose-400">{joinError}</p>
+                  )}
                 </form>
               )}
 

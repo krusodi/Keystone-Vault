@@ -55,6 +55,7 @@ import {
   joinWorkspaceWithCode,
   listWorkspaceInvites,
   listWorkspaceMembers,
+  parseWorkspaceInviteInput,
   propagateWorkspaceMembersToDocs,
   registerConnectedDevice,
   removeConnectedDevice,
@@ -1899,6 +1900,13 @@ export default function App() {
                       <span>เปิด Firebase Console → Authorized domains</span>
                       <ExternalLink className="w-3 h-3" />
                     </a>
+                    <button
+                      type="button"
+                      onClick={() => void signInWithGoogle()}
+                      className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-semibold hover:bg-rose-100/60 cursor-pointer"
+                    >
+                      ลองเชื่อมต่อใหม่
+                    </button>
                   </div>
                 )}
               </div>
@@ -1925,10 +1933,14 @@ export default function App() {
               </div>
               <div>
                 <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  เชื่อมต่อบัญชี Google เพื่อแสดงรายการหน้าหลักให้ตรงกับทุกอุปกรณ์
+                  {pendingUrlInviteRef.current?.inviteCode
+                    ? 'พร้อมเชื่อมต่อฐานข้อมูลร่วมจากลิงก์เชิญแล้ว'
+                    : 'เชื่อมต่อบัญชี Google เพื่อซิงก์ทุกอุปกรณ์ในขั้นตอนเดียว'}
                 </h2>
                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
-                  ขณะนี้อุปกรณ์นี้กำลังแสดงรายการในเครื่องเท่านั้น กดเชื่อมต่อบัญชี Google เพื่อดึงและซิงก์รายการแอปจากฐานข้อมูลเดียวกันแบบ Real-time
+                  {pendingUrlInviteRef.current?.inviteCode
+                    ? 'กดปุ่มเชื่อมต่อด้วย Google เพื่อยืนยันตัวตนและซิงก์รายการแอปทั้งหมดอัตโนมัติทันที'
+                    : 'กดเชื่อมต่อด้วย Google เพื่อดึงและซิงก์รายการแอปจากฐานข้อมูลเดียวกันแบบ Real-time'}
                 </p>
               </div>
             </div>
@@ -1951,12 +1963,10 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                    เชื่อมต่ออุปกรณ์นี้เข้าฐานข้อมูลร่วม (รหัสฐานข้อมูล:{' '}
-                    <span className="font-mono">{needsInvitePrompt.workspaceId}</span>)
+                    เชื่อมต่ออุปกรณ์นี้เข้าฐานข้อมูลร่วม
                   </h2>
                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    บัญชี Google นี้ ({firebaseUser.email}) ยังไม่ได้เข้าร่วมฐานข้อมูลร่วม
-                    กรอกรหัสเชื่อมต่อที่สร้างจากเมนู ตั้งค่าระบบ บนเครื่องหลัก เพื่อซิงก์ทุกอุปกรณ์แบบ Real-time
+                    บัญชี {firebaseUser.email} ยังไม่ได้เข้าร่วมฐานข้อมูลร่วม — วางลิงก์เชิญ หรือกรอกรหัสเชื่อมต่อ (KV-XXXX-XXXX-XXXX) จากเครื่องหลักเพื่อซิงก์ทันที
                   </p>
                 </div>
               </div>
@@ -1972,9 +1982,17 @@ export default function App() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 setInviteJoinError(null);
+                const parsed = parseWorkspaceInviteInput(
+                  inviteCodeInput,
+                  inviteWsInput || needsInvitePrompt.workspaceId
+                );
+                if (!parsed.inviteCode) {
+                  setInviteJoinError('กรุณาวางลิงก์เชิญ หรือกรอกรหัสเชื่อมต่อ');
+                  return;
+                }
                 setIsJoiningInvite(true);
                 try {
-                  await handleJoinWorkspace(inviteWsInput, inviteCodeInput);
+                  await handleJoinWorkspace(parsed.workspaceId, parsed.inviteCode);
                 } catch (err) {
                   setInviteJoinError(
                     err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อฐานข้อมูลร่วมได้'
@@ -1987,16 +2005,9 @@ export default function App() {
             >
               <input
                 type="text"
-                value={inviteWsInput}
-                onChange={(e) => setInviteWsInput(e.target.value)}
-                placeholder="รหัสฐานข้อมูล (ค่าเริ่มต้น: main)"
-                className="h-10 sm:h-9 sm:w-44 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <input
-                type="text"
                 value={inviteCodeInput}
-                onChange={(e) => setInviteCodeInput(e.target.value.toUpperCase())}
-                placeholder="กรอกรหัสเชื่อมต่อ เช่น KV-XXXX-XXXX-XXXX"
+                onChange={(e) => setInviteCodeInput(e.target.value)}
+                placeholder="วางลิงก์เชิญ หรือกรอกรหัส KV-XXXX-XXXX-XXXX"
                 required
                 className="flex-1 h-10 sm:h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
               />

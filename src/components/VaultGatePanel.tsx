@@ -471,6 +471,14 @@ export function VaultGatePanel({
                     >
                       เปิด Firebase Authorized domains
                     </a>
+                    <button
+                      type="button"
+                      disabled={isSigningIn}
+                      onClick={() => void signInWithGoogle()}
+                      className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-semibold hover:bg-rose-100/60 cursor-pointer disabled:opacity-60"
+                    >
+                      ลองเชื่อมต่อใหม่
+                    </button>
                   </div>
                 )}
               </div>

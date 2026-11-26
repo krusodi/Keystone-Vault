@@ -101,6 +101,40 @@ export function consumeWorkspaceInviteFromUrl(): {
   }
 }
 
+export function parseWorkspaceInviteInput(
+  raw: string,
+  fallbackWorkspaceId = DEFAULT_SHARED_WORKSPACE_ID
+): { workspaceId: string; inviteCode: string } {
+  const trimmed = raw.trim();
+  const cleanFallback = sanitizeDocId(fallbackWorkspaceId || DEFAULT_SHARED_WORKSPACE_ID);
+  if (!trimmed) {
+    return { workspaceId: cleanFallback, inviteCode: '' };
+  }
+
+  if (trimmed.includes('invite=') || /^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(
+        /^https?:\/\//i.test(trimmed) ? trimmed : `https://local.invalid/${trimmed.replace(/^\//, '')}`
+      );
+      const wsParam = parsed.searchParams.get('ws')?.trim();
+      const inviteParam = parsed.searchParams.get('invite')?.trim();
+      if (inviteParam) {
+        return {
+          workspaceId: wsParam && VALID_ID_REGEX.test(wsParam) ? wsParam : cleanFallback,
+          inviteCode: inviteParam.toUpperCase(),
+        };
+      }
+    } catch {
+      // fall through to raw code handling
+    }
+  }
+
+  return {
+    workspaceId: cleanFallback,
+    inviteCode: trimmed.toUpperCase(),
+  };
+}
+
 interface SanitizedPublicAppPayload {
   workspaceId: string;
   ownerId: string;
