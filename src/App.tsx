@@ -148,7 +148,9 @@ export default function App() {
   const {
     authReady,
     user: firebaseUser,
+    projectId,
     authError,
+    unauthorizedDomain,
     syncError,
     signInWithGoogle,
     setSyncStatus,
@@ -1865,11 +1867,41 @@ export default function App() {
         {!showLockGate && navFilter.type !== 'system' && (authError || syncError) && (
           <div
             role="alert"
-            className="flex items-center justify-between gap-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/90 dark:bg-rose-950/40 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-300"
+            className="flex items-start justify-between gap-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/90 dark:bg-rose-950/40 px-4 py-3 text-xs text-rose-700 dark:text-rose-300"
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span className="truncate">{authError || syncError}</span>
+            <div className="flex items-start gap-2.5 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="space-y-2 min-w-0">
+                <p className={unauthorizedDomain ? 'leading-relaxed' : 'truncate'}>
+                  {authError || syncError}
+                </p>
+                {unauthorizedDomain && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void handleCopyText(
+                          unauthorizedDomain,
+                          `คัดลอกโดเมน ${unauthorizedDomain} แล้ว`,
+                          false
+                        )
+                      }
+                      className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-mono hover:bg-rose-100/60 cursor-pointer"
+                    >
+                      คัดลอกโดเมน: {unauthorizedDomain}
+                    </button>
+                    <a
+                      href={`https://console.firebase.google.com/project/${projectId}/authentication/settings`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                    >
+                      <span>เปิด Firebase Console → Authorized domains</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                )}
+              </div>
             </div>
             <button
               type="button"

@@ -45,7 +45,14 @@ export function VaultGatePanel({
   onBackToHome,
   lastUpdatedAt,
 }: VaultGatePanelProps) {
-  const { user, projectId, isSigningIn, authError, signInWithGoogle } = useFirebase();
+  const {
+    user,
+    projectId,
+    isSigningIn,
+    authError,
+    unauthorizedDomain,
+    signInWithGoogle,
+  } = useFirebase();
   const [setupUsername, setSetupUsername] = useState('admin');
   const [setupDisplayName, setSetupDisplayName] = useState('ผู้ดูแลระบบหลัก');
   const [selectedAdminId, setSelectedAdminId] = useState<string>(admins[0]?.id ?? '');
@@ -443,7 +450,30 @@ export function VaultGatePanel({
               </button>
             )}
             {authError && (
-              <p className="text-xs text-rose-600 dark:text-rose-400">{authError}</p>
+              <div className="space-y-2 rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50/80 dark:bg-rose-950/30 p-2.5 text-xs text-rose-700 dark:text-rose-300">
+                <p className="leading-relaxed">{authError}</p>
+                {unauthorizedDomain && (
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void navigator.clipboard?.writeText(unauthorizedDomain)
+                      }
+                      className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-mono hover:bg-rose-100/60 cursor-pointer"
+                    >
+                      คัดลอก: {unauthorizedDomain}
+                    </button>
+                    <a
+                      href={`https://console.firebase.google.com/project/${projectId}/authentication/settings`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                    >
+                      เปิด Firebase Authorized domains
+                    </a>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

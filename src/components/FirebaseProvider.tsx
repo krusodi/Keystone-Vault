@@ -24,6 +24,7 @@ interface FirebaseContextValue {
   firestoreDatabaseId: string;
   isSigningIn: boolean;
   authError: string | null;
+  unauthorizedDomain: string | null;
   syncState: CloudSyncState;
   syncError: string | null;
   lastSyncedAt: number | null;
@@ -40,6 +41,7 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<CloudSyncState>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
@@ -51,6 +53,8 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
       if (!nextUser) {
         setSyncState('idle');
         setSyncError(null);
+      } else {
+        setUnauthorizedDomain(null);
       }
     });
     return () => unsub();
@@ -58,6 +62,7 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
 
   const signInWithGoogle = useCallback(async () => {
     setAuthError(null);
+    setUnauthorizedDomain(null);
     setIsSigningIn(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
@@ -68,6 +73,12 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
         setAuthError('ยกเลิกการเข้าสู่ระบบด้วย Google');
       } else if (msg.includes('popup-blocked')) {
         setAuthError('เบราว์เซอร์บล็อกหน้าต่างป๊อปอัป กรุณาอนุญาตป๊อปอัปแล้วลองใหม่');
+      } else if (msg.includes('unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setUnauthorizedDomain(host || null);
+        setAuthError(
+          `โดเมน "${host}" ยังไม่ได้รับอนุญาตใน Firebase Authentication (auth/unauthorized-domain) กรุณาเพิ่มโดเมนนี้ใน Authorized domains ของโปรเจกต์ ${firebaseProjectInfo.projectId}`
+        );
       } else {
         setAuthError(msg);
       }
@@ -79,6 +90,7 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
 
   const signOutGoogle = useCallback(async () => {
     setAuthError(null);
+    setUnauthorizedDomain(null);
     await signOut(auth);
     setSyncState('idle');
     setSyncError(null);
@@ -96,7 +108,10 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const clearAuthError = useCallback(() => setAuthError(null), []);
+  const clearAuthError = useCallback(() => {
+    setAuthError(null);
+    setUnauthorizedDomain(null);
+  }, []);
 
   const value = useMemo<FirebaseContextValue>(
     () => ({
@@ -106,6 +121,7 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
       firestoreDatabaseId: firebaseProjectInfo.firestoreDatabaseId,
       isSigningIn,
       authError,
+      unauthorizedDomain,
       syncState,
       syncError,
       lastSyncedAt,
@@ -119,6 +135,7 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
       user,
       isSigningIn,
       authError,
+      unauthorizedDomain,
       syncState,
       syncError,
       lastSyncedAt,
