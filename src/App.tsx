@@ -72,6 +72,7 @@ import {
   clearStoredEnvelope,
   downloadEncryptedBackup,
   getEnvelopeAdmins,
+  getPublicAppsSource,
   loadPublicApps,
   loadStoredEnvelope,
   loadSystemName,
@@ -130,7 +131,7 @@ function loadInitialPublicApps(): PublicAppEntry[] {
   }
 
   const samples = createSampleApps().map(toPublicAppEntry);
-  savePublicApps(samples);
+  savePublicApps(samples, 'sample');
   return samples;
 }
 
@@ -308,7 +309,7 @@ export default function App() {
         }));
 
         const nextPublic = sorted.map(toPublicAppEntry);
-        savePublicApps(nextPublic);
+        savePublicApps(nextPublic, 'cloud');
         setPublicApps(nextPublic);
       } catch {
         lockVault();
@@ -400,6 +401,14 @@ export default function App() {
         setIsWorkspaceOwner(access.isOwner);
         workspaceIdRef.current = access.workspaceId;
 
+        if (access.isOwner && access.memberUids.length > 1) {
+          await propagateWorkspaceMembersToDocs(
+            access.workspaceId,
+            access.memberUids,
+            uid
+          ).catch(() => {});
+        }
+
         await registerConnectedDevice(uid, access.workspaceId);
         lastDeviceHeartbeat = Date.now();
         if (cancelled) return;
@@ -423,33 +432,70 @@ export default function App() {
         }
 
         const localEnv = envelopeRef.current;
-        if (
-          cloud.envelope &&
-          (!localEnv || cloud.envelope.updatedAt > localEnv.updatedAt)
-        ) {
-          saveStoredEnvelope(cloud.envelope);
-          envelopeRef.current = cloud.envelope;
-          setEnvelope(cloud.envelope);
-          if (isUnlockedRef.current && dekRef.current) {
-            await applyRemoteEncryptedEnvelope(cloud.envelope);
+        const localSource = getPublicAppsSource();
+        const sameVault = Boolean(
+          localEnv?.version === 2 &&
+            cloud.envelope?.version === 2 &&
+            localEnv.keySlots.some((ls) =>
+              cloud.envelope!.keySlots.some((cs) => cs.id === ls.id)
+            )
+        );
+
+        const pushingNewerSameVault = Boolean(
+          localEnv &&
+            localEnv.version === 2 &&
+            (!cloud.envelope ||
+              (sameVault && localEnv.updatedAt > cloud.envelope.updatedAt))
+        );
+
+        if (cloud.envelope) {
+          if (
+            !localEnv ||
+            localEnv.version !== 2 ||
+            !sameVault ||
+            cloud.envelope.updatedAt > localEnv.updatedAt
+          ) {
+            saveStoredEnvelope(cloud.envelope);
+            envelopeRef.current = cloud.envelope;
+            setEnvelope(cloud.envelope);
+            if (isUnlockedRef.current && dekRef.current) {
+              await applyRemoteEncryptedEnvelope(cloud.envelope);
+            }
+          } else if (sameVault && localEnv.updatedAt > cloud.envelope.updatedAt) {
+            await saveEncryptedVaultToFirestore(uid, access.workspaceId, localEnv);
+            if (localSource !== 'sample') {
+              await syncPublicAppsToFirestore(
+                uid,
+                access.workspaceId,
+                publicAppsRef.current
+              );
+              savePublicApps(publicAppsRef.current, 'cloud');
+            }
           }
         } else if (localEnv && localEnv.version === 2) {
           await saveEncryptedVaultToFirestore(uid, access.workspaceId, localEnv);
+          if (localSource !== 'sample' || !cloud.hasSyncedPublicApps) {
+            await syncPublicAppsToFirestore(
+              uid,
+              access.workspaceId,
+              publicAppsRef.current
+            );
+            savePublicApps(publicAppsRef.current, 'cloud');
+          }
         }
 
-        if (
-          cloud.publicApps &&
-          (!localEnv ||
-            (cloud.envelope && cloud.envelope.updatedAt >= localEnv.updatedAt))
-        ) {
-          savePublicApps(cloud.publicApps);
-          setPublicApps(cloud.publicApps);
-        } else if (!cloud.publicApps && publicAppsRef.current.length > 0) {
-          await syncPublicAppsToFirestore(
-            uid,
-            access.workspaceId,
-            publicAppsRef.current
-          );
+        if (!pushingNewerSameVault) {
+          if (cloud.hasSyncedPublicApps) {
+            savePublicApps(cloud.publicApps, 'cloud');
+            setPublicApps(cloud.publicApps);
+          } else if (publicAppsRef.current.length > 0) {
+            await syncPublicAppsToFirestore(
+              uid,
+              access.workspaceId,
+              publicAppsRef.current
+            );
+            savePublicApps(publicAppsRef.current, 'cloud');
+          }
         }
 
         if (cancelled) return;
@@ -471,9 +517,11 @@ export default function App() {
               return;
             }
             if (access.isOwner) {
-              propagateWorkspaceMembersToDocs(access.workspaceId, memberUids).catch(
-                () => {}
-              );
+              propagateWorkspaceMembersToDocs(
+                access.workspaceId,
+                memberUids,
+                uid
+              ).catch(() => {});
             }
             listWorkspaceMembers(uid, access.workspaceId, access.isOwner)
               .then((list) => {
@@ -482,7 +530,7 @@ export default function App() {
               .catch(() => {});
           },
           onPublicApps: (cloudApps) => {
-            savePublicApps(cloudApps);
+            savePublicApps(cloudApps, 'cloud');
             setPublicApps(cloudApps);
           },
           onEnvelope: (cloudEnv) => {
@@ -606,7 +654,7 @@ export default function App() {
       setEnvelope(nextEnvelope);
 
       const nextPublic = nextApps.map(toPublicAppEntry);
-      savePublicApps(nextPublic);
+      savePublicApps(nextPublic, 'user');
       setPublicApps(nextPublic);
 
       if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
@@ -807,26 +855,43 @@ export default function App() {
     setShowAuthGate(false);
     setNavFilter({ type: 'all' });
 
+    const prevPublic = publicAppsRef.current;
     const nextPublic = sorted.map(toPublicAppEntry);
-    savePublicApps(nextPublic);
+    savePublicApps(nextPublic, 'user');
     setPublicApps(nextPublic);
 
-    if (
-      res.wasMigratedFromV1 &&
-      firebaseUser &&
-      firebaseUser.emailVerified &&
-      !needsInviteRef.current
-    ) {
-      saveEncryptedVaultToFirestore(
-        firebaseUser.uid,
-        workspaceIdRef.current,
-        res.envelope
-      ).catch(() => {});
-      syncPublicAppsToFirestore(
-        firebaseUser.uid,
-        workspaceIdRef.current,
-        nextPublic
-      ).catch(() => {});
+    const publicAppsDiffer =
+      prevPublic.length !== nextPublic.length ||
+      nextPublic.some((item, idx) => {
+        const prev = prevPublic[idx];
+        return (
+          !prev ||
+          prev.id !== item.id ||
+          prev.name !== item.name ||
+          prev.target_url !== item.target_url ||
+          prev.logo_type !== item.logo_type ||
+          prev.logo_value !== item.logo_value ||
+          prev.category !== item.category ||
+          prev.sort_order !== item.sort_order ||
+          prev.is_favorite !== item.is_favorite
+        );
+      });
+
+    if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+      if (res.wasMigratedFromV1) {
+        saveEncryptedVaultToFirestore(
+          firebaseUser.uid,
+          workspaceIdRef.current,
+          res.envelope
+        ).catch(() => {});
+      }
+      if (res.wasMigratedFromV1 || publicAppsDiffer) {
+        syncPublicAppsToFirestore(
+          firebaseUser.uid,
+          workspaceIdRef.current,
+          nextPublic
+        ).catch(() => {});
+      }
     }
 
     fulfillPendingAction();
@@ -866,7 +931,7 @@ export default function App() {
     setNavFilter({ type: 'all' });
 
     const nextPublic = sorted.map(toPublicAppEntry);
-    savePublicApps(nextPublic);
+    savePublicApps(nextPublic, 'user');
     setPublicApps(nextPublic);
 
     if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
@@ -993,7 +1058,7 @@ export default function App() {
       item.id === app.id ? { ...item, lastUsedAt: now } : item
     );
     setPublicApps(nextPublic);
-    savePublicApps(nextPublic);
+    savePublicApps(nextPublic, getPublicAppsSource());
 
     if (isUnlocked) {
       const nextVault = vaultApps.map((item) =>
@@ -1128,10 +1193,14 @@ export default function App() {
     await removeWorkspaceMember(workspaceIdRef.current, memberUid);
     const updated = workspaceMembers.filter((m) => m.uid !== memberUid);
     setWorkspaceMembers(updated);
-    if (isWorkspaceOwner) {
+    if (isWorkspaceOwner && firebaseUser) {
       const nextUids = updated.map((m) => m.uid);
       if (nextUids.length > 0) {
-        await propagateWorkspaceMembersToDocs(workspaceIdRef.current, nextUids);
+        await propagateWorkspaceMembersToDocs(
+          workspaceIdRef.current,
+          nextUids,
+          firebaseUser.uid
+        );
       }
     }
   }
@@ -1814,6 +1883,31 @@ export default function App() {
               <X className="w-4 h-4" />
             </button>
           </div>
+        )}
+
+        {authReady && !firebaseUser && !showLockGate && navFilter.type === 'home' && (
+          <section className="bg-white/95 dark:bg-slate-900/95 border border-sky-200 dark:border-sky-800/70 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+                <Cloud className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  เชื่อมต่อบัญชี Google เพื่อแสดงรายการหน้าหลักให้ตรงกับทุกอุปกรณ์
+                </h2>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
+                  ขณะนี้อุปกรณ์นี้กำลังแสดงรายการในเครื่องเท่านั้น กดเชื่อมต่อบัญชี Google เพื่อดึงและซิงก์รายการแอปจากฐานข้อมูลเดียวกันแบบ Real-time
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void signInWithGoogle()}
+              className="h-10 sm:h-9 px-4 rounded-lg bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 shadow-xs transition-all"
+            >
+              เชื่อมต่อด้วย Google
+            </button>
+          </section>
         )}
 
         {firebaseUser && needsInvitePrompt && (

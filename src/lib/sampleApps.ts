@@ -5,7 +5,7 @@ export function createSampleApps(): AppItem[] {
   const now = Date.now();
   return [
     {
-      id: crypto.randomUUID(),
+      id: 'sample-github',
       name: 'GitHub Workspace',
       logo_type: 'favicon',
       logo_value: 'https://github.com',
@@ -23,7 +23,7 @@ export function createSampleApps(): AppItem[] {
       lastUsedAt: now - 1000 * 60 * 35,
     },
     {
-      id: crypto.randomUUID(),
+      id: 'sample-figma',
       name: 'Figma Design System',
       logo_type: 'favicon',
       logo_value: 'https://www.figma.com',
@@ -41,7 +41,7 @@ export function createSampleApps(): AppItem[] {
       lastUsedAt: now - 1000 * 60 * 120,
     },
     {
-      id: crypto.randomUUID(),
+      id: 'sample-slack',
       name: 'Slack Desktop',
       logo_type: 'preset_icon',
       logo_value: 'message:cobalt',
@@ -58,7 +58,7 @@ export function createSampleApps(): AppItem[] {
       updatedAt: now,
     },
     {
-      id: crypto.randomUUID(),
+      id: 'sample-vscode',
       name: 'VS Code Project',
       logo_type: 'preset_icon',
       logo_value: 'code:slate',
@@ -75,7 +75,7 @@ export function createSampleApps(): AppItem[] {
       updatedAt: now,
     },
     {
-      id: crypto.randomUUID(),
+      id: 'sample-kbank',
       name: 'KBank Biz Online',
       logo_type: 'preset_icon',
       logo_value: 'wallet:emerald',
@@ -92,7 +92,7 @@ export function createSampleApps(): AppItem[] {
       updatedAt: now,
     },
     {
-      id: crypto.randomUUID(),
+      id: 'sample-notion',
       name: 'Notion Knowledge Base',
       logo_type: 'favicon',
       logo_value: 'https://www.notion.so',

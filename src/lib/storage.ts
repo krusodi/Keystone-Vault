@@ -7,8 +7,11 @@ import {
 } from '../types/vault';
 
 const PUBLIC_APPS_KEY = 'keystone_public_apps_v1';
+const PUBLIC_APPS_SOURCE_KEY = 'keystone_public_apps_source_v1';
 const ENVELOPE_STORAGE_KEY = 'keystone_vault_envelope_v1';
 const SYSTEM_NAME_KEY = 'keystone_system_name_v1';
+
+export type PublicAppsSource = 'sample' | 'user' | 'cloud';
 
 export function toPublicAppEntry(app: AppItem | PublicAppEntry): PublicAppEntry {
   return {
@@ -45,6 +48,18 @@ export function saveSystemName(name: string): string {
   return cleaned;
 }
 
+export function getPublicAppsSource(): PublicAppsSource {
+  try {
+    const val = localStorage.getItem(PUBLIC_APPS_SOURCE_KEY);
+    if (val === 'sample' || val === 'user' || val === 'cloud') {
+      return val;
+    }
+  } catch {
+    // ignore
+  }
+  return 'sample';
+}
+
 export function loadPublicApps(): PublicAppEntry[] | null {
   try {
     const raw = localStorage.getItem(PUBLIC_APPS_KEY);
@@ -57,9 +72,17 @@ export function loadPublicApps(): PublicAppEntry[] | null {
   }
 }
 
-export function savePublicApps(apps: Array<AppItem | PublicAppEntry>): void {
+export function savePublicApps(
+  apps: Array<AppItem | PublicAppEntry>,
+  source: PublicAppsSource = 'user'
+): void {
   const sanitized = apps.map(toPublicAppEntry);
   localStorage.setItem(PUBLIC_APPS_KEY, JSON.stringify(sanitized));
+  try {
+    localStorage.setItem(PUBLIC_APPS_SOURCE_KEY, source);
+  } catch {
+    // ignore storage quota errors
+  }
 }
 
 export function loadStoredEnvelope(): EncryptedVaultEnvelope | null {

@@ -671,7 +671,7 @@ export async function joinWorkspaceWithCode(
     }
   }
 
-  // Propagate member UID onto existing publicApps & devices so list queries include them immediately
+  // Propagate member UID onto existing publicApps & devices resiliently so missing/deleted docs never abort the rest
   try {
     const idxSnap = await getDoc(doc(db, 'workspaces', cleanWsId, 'publicState', 'index'));
     if (idxSnap.exists()) {
@@ -683,21 +683,25 @@ export async function joinWorkspaceWithCode(
         ? idxData.deviceIds.map(String)
         : [];
 
-      if (appIds.length > 0 || deviceIds.length > 0) {
-        const propBatch = writeBatch(db);
-        appIds.slice(0, 200).forEach((appId) => {
-          propBatch.update(doc(db, 'workspaces', cleanWsId, 'publicApps', appId), {
+      const updates: Array<Promise<unknown>> = [];
+      appIds.slice(0, 200).forEach((appId) => {
+        updates.push(
+          updateDoc(doc(db, 'workspaces', cleanWsId, 'publicApps', appId), {
             memberUids: arrayUnion(uid),
             updatedAt: serverTimestamp(),
-          });
-        });
-        deviceIds.slice(0, 50).forEach((devId) => {
-          propBatch.update(doc(db, 'workspaces', cleanWsId, 'devices', devId), {
+          })
+        );
+      });
+      deviceIds.slice(0, 50).forEach((devId) => {
+        updates.push(
+          updateDoc(doc(db, 'workspaces', cleanWsId, 'devices', devId), {
             memberUids: arrayUnion(uid),
             updatedAt: serverTimestamp(),
-          });
-        });
-        await propBatch.commit();
+          })
+        );
+      });
+      if (updates.length > 0) {
+        await Promise.allSettled(updates);
       }
     }
   } catch {
@@ -709,37 +713,85 @@ export async function joinWorkspaceWithCode(
 
 export async function propagateWorkspaceMembersToDocs(
   workspaceId: string,
-  memberUids: string[]
+  memberUids: string[],
+  ownerUid?: string
 ): Promise<void> {
   const cleanWsId = sanitizeDocId(workspaceId);
   const cleanMembers = Array.from(new Set(memberUids.map(sanitizeDocId))).slice(0, 20);
   if (cleanMembers.length === 0) return;
 
   try {
+    const updates: Array<Promise<unknown>> = [];
+    const targetAppIds: string[] = [];
+
+    if (ownerUid) {
+      const appsSnap = await getDocs(
+        query(
+          collection(db, 'workspaces', cleanWsId, 'publicApps'),
+          where('ownerId', '==', ownerUid)
+        )
+      );
+      appsSnap.docs.forEach((d) => {
+        targetAppIds.push(d.id);
+        const existingMembers = Array.isArray(d.data().memberUids)
+          ? (d.data().memberUids as string[]).map(String)
+          : [];
+        const sameLength = existingMembers.length === cleanMembers.length;
+        const sameSet =
+          sameLength && cleanMembers.every((m) => existingMembers.includes(m));
+        if (!sameSet) {
+          updates.push(
+            updateDoc(d.ref, {
+              memberUids: cleanMembers,
+              updatedAt: serverTimestamp(),
+            })
+          );
+        }
+      });
+    }
+
     const idxSnap = await getDoc(doc(db, 'workspaces', cleanWsId, 'publicState', 'index'));
-    if (!idxSnap.exists()) return;
-    const data = idxSnap.data();
-    const appIds: string[] = Array.isArray(data.appIds) ? data.appIds.map(String) : [];
-    const deviceIds: string[] = Array.isArray(data.deviceIds)
-      ? data.deviceIds.map(String)
-      : [];
+    if (idxSnap.exists()) {
+      const data = idxSnap.data();
+      const idxAppIds: string[] = Array.isArray(data.appIds) ? data.appIds.map(String) : [];
+      const deviceIds: string[] = Array.isArray(data.deviceIds)
+        ? data.deviceIds.map(String)
+        : [];
 
-    if (appIds.length === 0 && deviceIds.length === 0) return;
+      if (!ownerUid) {
+        idxAppIds.slice(0, 200).forEach((appId) => {
+          updates.push(
+            updateDoc(doc(db, 'workspaces', cleanWsId, 'publicApps', appId), {
+              memberUids: cleanMembers,
+              updatedAt: serverTimestamp(),
+            })
+          );
+        });
+      } else if (
+        targetAppIds.length !== idxAppIds.length ||
+        targetAppIds.some((id, idx) => idxAppIds[idx] !== id)
+      ) {
+        updates.push(
+          updateDoc(idxSnap.ref, {
+            appIds: targetAppIds.slice(0, 200),
+            updatedAt: serverTimestamp(),
+          })
+        );
+      }
 
-    const batch = writeBatch(db);
-    appIds.slice(0, 200).forEach((appId) => {
-      batch.update(doc(db, 'workspaces', cleanWsId, 'publicApps', appId), {
-        memberUids: cleanMembers,
-        updatedAt: serverTimestamp(),
+      deviceIds.slice(0, 50).forEach((devId) => {
+        updates.push(
+          updateDoc(doc(db, 'workspaces', cleanWsId, 'devices', devId), {
+            memberUids: cleanMembers,
+            updatedAt: serverTimestamp(),
+          })
+        );
       });
-    });
-    deviceIds.slice(0, 50).forEach((devId) => {
-      batch.update(doc(db, 'workspaces', cleanWsId, 'devices', devId), {
-        memberUids: cleanMembers,
-        updatedAt: serverTimestamp(),
-      });
-    });
-    await batch.commit();
+    }
+
+    if (updates.length > 0) {
+      await Promise.allSettled(updates);
+    }
   } catch {
     // Ignore stale index entries during concurrent deletes
   }
@@ -1074,7 +1126,8 @@ export async function saveEncryptedVaultToFirestore(
 
 export interface CloudWorkspaceSnapshot {
   systemName: string | null;
-  publicApps: PublicAppEntry[] | null;
+  publicApps: PublicAppEntry[];
+  hasSyncedPublicApps: boolean;
   envelope: EncryptedVaultEnvelopeV2 | null;
 }
 
@@ -1156,7 +1209,8 @@ export async function fetchCloudWorkspaceState(
 
   return {
     systemName,
-    publicApps: cloudApps.length > 0 ? cloudApps : null,
+    publicApps: cloudApps,
+    hasSyncedPublicApps: cloudApps.length > 0 || cloudEnvelope !== null,
     envelope: cloudEnvelope,
   };
 }
