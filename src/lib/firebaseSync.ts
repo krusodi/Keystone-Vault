@@ -374,7 +374,8 @@ async function migrateLegacyUserWorkspaceToShared(
 async function bootstrapOwnedSharedWorkspace(
   uid: string,
   workspaceId: string,
-  fallbackSystemName: string
+  fallbackSystemName: string,
+  allowLegacyMigration = false
 ): Promise<SharedWorkspaceResolution> {
   const cleanWsId = sanitizeDocId(workspaceId);
   const cleanName = sanitizeSystemName(fallbackSystemName);
@@ -401,6 +402,17 @@ async function bootstrapOwnedSharedWorkspace(
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      if (
+        cleanWsId === DEFAULT_SHARED_WORKSPACE_ID &&
+        (raw.includes('permission-denied') ||
+          raw.includes('Missing or insufficient permissions'))
+      ) {
+        return {
+          status: 'needs_invite',
+          workspaceId: cleanWsId,
+        };
+      }
       handleFirestoreError(error, OperationType.CREATE, wsPath);
     }
   }
@@ -448,9 +460,10 @@ async function bootstrapOwnedSharedWorkspace(
     handleFirestoreError(error, OperationType.WRITE, indexPath);
   }
 
-  const finalName = !existed
-    ? await migrateLegacyUserWorkspaceToShared(uid, cleanWsId, cleanName)
-    : cleanName;
+  const finalName =
+    !existed && allowLegacyMigration
+      ? await migrateLegacyUserWorkspaceToShared(uid, cleanWsId, cleanName)
+      : cleanName;
 
   saveWorkspaceId(cleanWsId);
 
@@ -468,7 +481,8 @@ export async function resolveSharedWorkspaceAccess(
   uid: string,
   userEmail: string | null | undefined,
   preferredWorkspaceId: string,
-  fallbackSystemName: string
+  fallbackSystemName: string,
+  allowLegacyMigration = false
 ): Promise<SharedWorkspaceResolution> {
   const cleanWsId = sanitizeDocId(preferredWorkspaceId || DEFAULT_SHARED_WORKSPACE_ID);
   const memberPath = `workspaces/${cleanWsId}/members/${uid}`;
@@ -514,11 +528,13 @@ export async function resolveSharedWorkspaceAccess(
   const personalWsId = `ws-${sanitizeDocId(uid.slice(0, 16))}`;
   const isBootstrappedOwner = userEmail === BOOTSTRAPPED_ADMIN_EMAIL;
 
-  if (
-    (cleanWsId === DEFAULT_SHARED_WORKSPACE_ID && isBootstrappedOwner) ||
-    cleanWsId === personalWsId
-  ) {
-    return bootstrapOwnedSharedWorkspace(uid, cleanWsId, fallbackSystemName);
+  if (cleanWsId === DEFAULT_SHARED_WORKSPACE_ID || cleanWsId === personalWsId) {
+    return bootstrapOwnedSharedWorkspace(
+      uid,
+      cleanWsId,
+      fallbackSystemName,
+      allowLegacyMigration && isBootstrappedOwner
+    );
   }
 
   return {
@@ -529,10 +545,16 @@ export async function resolveSharedWorkspaceAccess(
 
 export async function createPersonalSharedWorkspace(
   uid: string,
-  fallbackSystemName: string
+  fallbackSystemName: string,
+  allowLegacyMigration = false
 ): Promise<SharedWorkspaceResolution> {
   const personalWsId = `ws-${sanitizeDocId(uid.slice(0, 16))}`;
-  return bootstrapOwnedSharedWorkspace(uid, personalWsId, fallbackSystemName);
+  return bootstrapOwnedSharedWorkspace(
+    uid,
+    personalWsId,
+    fallbackSystemName,
+    allowLegacyMigration
+  );
 }
 
 async function getWorkspaceMetadata(

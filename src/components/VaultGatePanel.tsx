@@ -51,6 +51,8 @@ export function VaultGatePanel({
     isSigningIn,
     authError,
     unauthorizedDomain,
+    anonymousAuthDisabled,
+    connectWithoutGoogle,
     signInWithGoogle,
   } = useFirebase();
   const [setupUsername, setSetupUsername] = useState('admin');
@@ -430,7 +432,9 @@ export function VaultGatePanel({
                 <span className="inline-flex items-center gap-1.5 truncate">
                   <Cloud className="w-3.5 h-3.5 shrink-0" />
                   <span className="truncate">
-                    ซิงก์คลาวด์ {projectId}: {user.email}
+                    {user.isAnonymous
+                      ? `ซิงก์คลาวด์อัตโนมัติ ${projectId} (ไม่ต้องใช้บัญชี Google)`
+                      : `ซิงก์คลาวด์ ${projectId}: ${user.email}`}
                   </span>
                 </span>
               </div>
@@ -438,7 +442,7 @@ export function VaultGatePanel({
               <button
                 type="button"
                 disabled={isSigningIn}
-                onClick={signInWithGoogle}
+                onClick={connectWithoutGoogle}
                 className="w-full h-9 px-3 rounded-lg border border-sky-200 dark:border-sky-800/70 bg-sky-50/70 dark:bg-sky-950/30 text-xs font-semibold text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-950/60 inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60"
               >
                 <Cloud className="w-3.5 h-3.5" />
@@ -452,6 +456,26 @@ export function VaultGatePanel({
             {authError && (
               <div className="space-y-2 rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50/80 dark:bg-rose-950/30 p-2.5 text-xs text-rose-700 dark:text-rose-300">
                 <p className="leading-relaxed">{authError}</p>
+                {anonymousAuthDisabled && (
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                    <a
+                      href={`https://console.firebase.google.com/project/${projectId}/authentication/providers`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                    >
+                      เปิด Firebase Console → เปิด Anonymous
+                    </a>
+                    <button
+                      type="button"
+                      disabled={isSigningIn}
+                      onClick={() => void connectWithoutGoogle()}
+                      className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-semibold hover:bg-rose-100/60 cursor-pointer disabled:opacity-60"
+                    >
+                      ลองเชื่อมต่อใหม่
+                    </button>
+                  </div>
+                )}
                 {unauthorizedDomain && (
                   <div className="flex flex-wrap items-center gap-2 pt-0.5">
                     <button

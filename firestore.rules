@@ -26,6 +26,13 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isWorkspaceAuthUser() {
+      return isSignedIn() && (
+        request.auth.token.firebase.sign_in_provider == 'anonymous' ||
+        request.auth.token.email_verified == true
+      );
+    }
+
     function isOwner(userId) {
       return isVerifiedUser() && request.auth.uid == userId;
     }
@@ -52,13 +59,13 @@ service cloud.firestore {
     }
 
     function isWorkspaceOwner(workspaceId) {
-      return isVerifiedUser() &&
+      return isWorkspaceAuthUser() &&
         exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
         get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
     }
 
     function isWorkspaceMember(workspaceId) {
-      return isVerifiedUser() && (
+      return isWorkspaceAuthUser() && (
         isWorkspaceOwner(workspaceId) ||
         exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
       );
@@ -394,19 +401,18 @@ service cloud.firestore {
     }
 
     match /workspaces/{workspaceId} {
-      allow get: if isValidId(workspaceId) && isVerifiedUser() && (
+      allow get: if isValidId(workspaceId) && isWorkspaceAuthUser() && (
         existing().ownerId == request.auth.uid ||
         request.auth.uid in existing().memberUids ||
         exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
       );
-      allow list: if isVerifiedUser() && (
+      allow list: if isWorkspaceAuthUser() && (
         existing().ownerId == request.auth.uid ||
         request.auth.uid in existing().memberUids
       );
       allow create: if isValidId(workspaceId) &&
-        isVerifiedUser() &&
+        isWorkspaceAuthUser() &&
         isValidWorkspaceRoot(incoming()) &&
-        (workspaceId != 'main' || isBootstrappedAdmin()) &&
         incoming().id == workspaceId &&
         incoming().ownerId == request.auth.uid &&
         incoming().memberUids.size() == 1 &&
@@ -414,7 +420,7 @@ service cloud.firestore {
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isValidId(workspaceId) &&
-        isVerifiedUser() &&
+        isWorkspaceAuthUser() &&
         isValidWorkspaceRoot(incoming()) &&
         incoming().id == existing().id &&
         incoming().ownerId == existing().ownerId &&
@@ -430,7 +436,7 @@ service cloud.firestore {
             existing().ownerId == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
           ) ||
-          // Action 3: Verified user joins atomically with invite-backed member record
+          // Action 3: Authenticated device/user joins atomically with invite-backed member record
           (
             !(request.auth.uid in existing().memberUids) &&
             incoming().memberUids.hasAll(existing().memberUids) &&
@@ -440,19 +446,19 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
           )
         );
-      allow delete: if isValidId(workspaceId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+      allow delete: if isValidId(workspaceId) && isWorkspaceAuthUser() && existing().ownerId == request.auth.uid;
 
       match /members/{memberId} {
-        allow get: if isValidId(workspaceId) && isValidId(memberId) && isVerifiedUser() && (
+        allow get: if isValidId(workspaceId) && isValidId(memberId) && isWorkspaceAuthUser() && (
           memberId == request.auth.uid || isWorkspaceMember(workspaceId)
         );
-        allow list: if isVerifiedUser() && (
+        allow list: if isWorkspaceAuthUser() && (
           existing().uid == request.auth.uid ||
           existing().workspaceOwnerId == request.auth.uid
         );
         allow create: if isValidId(workspaceId) &&
           isValidId(memberId) &&
-          isVerifiedUser() &&
+          isWorkspaceAuthUser() &&
           isValidWorkspaceMember(incoming()) &&
           memberId == request.auth.uid &&
           incoming().uid == request.auth.uid &&
@@ -477,7 +483,7 @@ service cloud.firestore {
           );
         allow update: if isValidId(workspaceId) &&
           isValidId(memberId) &&
-          isVerifiedUser() &&
+          isWorkspaceAuthUser() &&
           isValidWorkspaceMember(incoming()) &&
           incoming().uid == existing().uid &&
           incoming().workspaceId == existing().workspaceId &&
@@ -488,18 +494,18 @@ service cloud.firestore {
             (isWorkspaceOwner(workspaceId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'label', 'updatedAt'])) ||
             (memberId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['label', 'updatedAt']))
           );
-        allow delete: if isValidId(workspaceId) && isValidId(memberId) && isVerifiedUser() && hasParentSharedWorkspace(workspaceId) && (
+        allow delete: if isValidId(workspaceId) && isValidId(memberId) && isWorkspaceAuthUser() && hasParentSharedWorkspace(workspaceId) && (
           (isWorkspaceOwner(workspaceId) && memberId != request.auth.uid) ||
           (memberId == request.auth.uid && existing().role == 'member')
         );
       }
 
       match /invites/{inviteId} {
-        allow get: if isValidId(workspaceId) && isValidId(inviteId) && inviteId.size() >= 8 && isVerifiedUser() && (
+        allow get: if isValidId(workspaceId) && isValidId(inviteId) && inviteId.size() >= 8 && isWorkspaceAuthUser() && (
           isWorkspaceOwner(workspaceId) ||
           existing().active == true
         );
-        allow list: if isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow list: if isWorkspaceAuthUser() && existing().ownerId == request.auth.uid;
         allow create: if isValidId(workspaceId) &&
           isValidId(inviteId) &&
           isWorkspaceOwner(workspaceId) &&
@@ -551,7 +557,7 @@ service cloud.firestore {
 
       match /publicApps/{appId} {
         allow get: if isValidId(workspaceId) && isValidId(appId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
-        allow list: if isVerifiedUser() && (
+        allow list: if isWorkspaceAuthUser() && (
           existing().ownerId == request.auth.uid ||
           request.auth.uid in existing().memberUids
         );
@@ -597,7 +603,7 @@ service cloud.firestore {
 
       match /vaultData/{vaultId} {
         allow get: if isValidId(workspaceId) && isValidId(vaultId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
-        allow list: if isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow list: if isWorkspaceAuthUser() && existing().ownerId == request.auth.uid;
         allow create: if isValidId(workspaceId) &&
           isValidId(vaultId) &&
           isWorkspaceMember(workspaceId) &&
@@ -632,7 +638,7 @@ service cloud.firestore {
 
       match /devices/{deviceId} {
         allow get: if isValidId(workspaceId) && isValidId(deviceId) && isWorkspaceMember(workspaceId) && hasParentSharedWorkspace(workspaceId);
-        allow list: if isVerifiedUser() && (
+        allow list: if isWorkspaceAuthUser() && (
           existing().ownerId == request.auth.uid ||
           request.auth.uid in existing().memberUids
         );

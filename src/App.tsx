@@ -150,9 +150,12 @@ export default function App() {
     authReady,
     user: firebaseUser,
     projectId,
+    isSigningIn,
     authError,
     unauthorizedDomain,
+    anonymousAuthDisabled,
     syncError,
+    connectWithoutGoogle,
     signInWithGoogle,
     setSyncStatus,
     clearAuthError,
@@ -336,8 +339,9 @@ export default function App() {
       setNeedsInvitePrompt(null);
       return;
     }
-    if (!firebaseUser.emailVerified) {
-      setSyncStatus('error', 'บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล');
+    const isCloudEligible = firebaseUser.isAnonymous || firebaseUser.emailVerified;
+    if (!isCloudEligible) {
+      setSyncStatus('error', 'บัญชีนี้ยังไม่ได้รับการยืนยันสำหรับการซิงก์');
       return;
     }
 
@@ -345,7 +349,11 @@ export default function App() {
     let unsubscribe: (() => void) | null = null;
     let lastDeviceHeartbeat = 0;
 
-    async function initCloudSync(uid: string, email: string | null | undefined) {
+    async function initCloudSync(
+      uid: string,
+      email: string | null | undefined,
+      allowLegacyMigration: boolean
+    ) {
       setSyncStatus('syncing');
       try {
         const targetWsId = workspaceIdRef.current || DEFAULT_SHARED_WORKSPACE_ID;
@@ -384,7 +392,8 @@ export default function App() {
           uid,
           email,
           targetWsId,
-          systemNameRef.current
+          systemNameRef.current,
+          allowLegacyMigration
         );
         if (cancelled) return;
 
@@ -568,13 +577,17 @@ export default function App() {
       }
     }
 
-    initCloudSync(firebaseUser.uid, firebaseUser.email);
+    initCloudSync(
+      firebaseUser.uid,
+      firebaseUser.email,
+      Boolean(!firebaseUser.isAnonymous && firebaseUser.emailVerified)
+    );
 
     const handleVisibilityRefresh = () => {
       if (
         document.visibilityState === 'visible' &&
         firebaseUser &&
-        firebaseUser.emailVerified &&
+        (firebaseUser.isAnonymous || firebaseUser.emailVerified) &&
         !needsInviteRef.current &&
         Date.now() - lastDeviceHeartbeat > 5 * 60 * 1000
       ) {
@@ -660,7 +673,11 @@ export default function App() {
       savePublicApps(nextPublic, 'user');
       setPublicApps(nextPublic);
 
-      if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+      if (
+        firebaseUser &&
+        (firebaseUser.isAnonymous || firebaseUser.emailVerified) &&
+        !needsInviteRef.current
+      ) {
         setSyncStatus('syncing');
         try {
           await saveEncryptedVaultToFirestore(
@@ -880,7 +897,11 @@ export default function App() {
         );
       });
 
-    if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+    if (
+      firebaseUser &&
+      (firebaseUser.isAnonymous || firebaseUser.emailVerified) &&
+      !needsInviteRef.current
+    ) {
       if (res.wasMigratedFromV1) {
         saveEncryptedVaultToFirestore(
           firebaseUser.uid,
@@ -937,7 +958,11 @@ export default function App() {
     savePublicApps(nextPublic, 'user');
     setPublicApps(nextPublic);
 
-    if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+    if (
+      firebaseUser &&
+      (firebaseUser.isAnonymous || firebaseUser.emailVerified) &&
+      !needsInviteRef.current
+    ) {
       saveEncryptedVaultToFirestore(
         firebaseUser.uid,
         workspaceIdRef.current,
@@ -1069,7 +1094,11 @@ export default function App() {
       );
       setVaultApps(nextVault);
       persistEncryptedVault(nextVault, customCategories, settings).catch(() => {});
-    } else if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+    } else if (
+      firebaseUser &&
+      (firebaseUser.isAnonymous || firebaseUser.emailVerified) &&
+      !needsInviteRef.current
+    ) {
       updatePublicAppLastUsedInFirestore(workspaceIdRef.current, app.id, now).catch(
         () => {}
       );
@@ -1133,7 +1162,11 @@ export default function App() {
     if (isUnlocked) {
       await persistEncryptedVault(vaultApps, customCategories, nextSettings);
     }
-    if (firebaseUser && firebaseUser.emailVerified && !needsInviteRef.current) {
+    if (
+      firebaseUser &&
+      (firebaseUser.isAnonymous || firebaseUser.emailVerified) &&
+      !needsInviteRef.current
+    ) {
       setSyncStatus('syncing');
       try {
         await saveCloudSystemName(workspaceIdRef.current, cleaned);
@@ -1148,7 +1181,13 @@ export default function App() {
   }
 
   async function handleManualCloudSync() {
-    if (!firebaseUser || !firebaseUser.emailVerified || needsInviteRef.current) return;
+    if (
+      !firebaseUser ||
+      (!firebaseUser.isAnonymous && !firebaseUser.emailVerified) ||
+      needsInviteRef.current
+    ) {
+      return;
+    }
     const wsId = workspaceIdRef.current;
     setSyncStatus('syncing');
     try {
@@ -1171,13 +1210,19 @@ export default function App() {
   }
 
   async function handleRemoveDevice(deviceId: string) {
-    if (!firebaseUser || !firebaseUser.emailVerified || needsInviteRef.current) return;
+    if (
+      !firebaseUser ||
+      (!firebaseUser.isAnonymous && !firebaseUser.emailVerified) ||
+      needsInviteRef.current
+    ) {
+      return;
+    }
     await removeConnectedDevice(workspaceIdRef.current, deviceId);
   }
 
   async function handleCreateWorkspaceInvite() {
-    if (!firebaseUser || !firebaseUser.emailVerified) {
-      throw new Error('กรุณาเข้าสู่ระบบบัญชี Google ก่อน');
+    if (!firebaseUser || (!firebaseUser.isAnonymous && !firebaseUser.emailVerified)) {
+      throw new Error('กรุณาเชื่อมต่อซิงก์คลาวด์ก่อน');
     }
     const invite = await createWorkspaceInvite(
       firebaseUser.uid,
@@ -1209,8 +1254,8 @@ export default function App() {
   }
 
   async function handleJoinWorkspace(targetWsId: string, inviteCode: string) {
-    if (!firebaseUser || !firebaseUser.emailVerified) {
-      throw new Error('กรุณาเข้าสู่ระบบบัญชี Google ก่อน');
+    if (!firebaseUser || (!firebaseUser.isAnonymous && !firebaseUser.emailVerified)) {
+      throw new Error('กรุณาเชื่อมต่อซิงก์คลาวด์ก่อน');
     }
     const cleanWs = targetWsId.trim() || DEFAULT_SHARED_WORKSPACE_ID;
     await joinWorkspaceWithCode(
@@ -1228,13 +1273,16 @@ export default function App() {
   }
 
   async function handleCreateOwnWorkspace() {
-    if (!firebaseUser || !firebaseUser.emailVerified) return;
+    if (!firebaseUser || (!firebaseUser.isAnonymous && !firebaseUser.emailVerified)) {
+      return;
+    }
     setIsJoiningInvite(true);
     setInviteJoinError(null);
     try {
       const res = await createPersonalSharedWorkspace(
         firebaseUser.uid,
-        systemNameRef.current
+        systemNameRef.current,
+        Boolean(!firebaseUser.isAnonymous && firebaseUser.emailVerified)
       );
       setNeedsInvitePrompt(null);
       workspaceIdRef.current = res.workspaceId;
@@ -1251,7 +1299,7 @@ export default function App() {
 
   async function handleQuickCloudAction() {
     if (!firebaseUser) {
-      await signInWithGoogle();
+      await connectWithoutGoogle();
       return;
     }
     if (isUnlocked) {
@@ -1873,9 +1921,30 @@ export default function App() {
             <div className="flex items-start gap-2.5 min-w-0">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <div className="space-y-2 min-w-0">
-                <p className={unauthorizedDomain ? 'leading-relaxed' : 'truncate'}>
+                <p className={unauthorizedDomain || anonymousAuthDisabled ? 'leading-relaxed' : 'truncate'}>
                   {authError || syncError}
                 </p>
+                {anonymousAuthDisabled && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={`https://console.firebase.google.com/project/${projectId}/authentication/providers`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                    >
+                      <span>เปิด Firebase Console → เปิดใช้งาน Anonymous</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                    <button
+                      type="button"
+                      disabled={isSigningIn}
+                      onClick={() => void connectWithoutGoogle()}
+                      className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-semibold hover:bg-rose-100/60 cursor-pointer disabled:opacity-60"
+                    >
+                      ลองเชื่อมต่อใหม่
+                    </button>
+                  </div>
+                )}
                 {unauthorizedDomain && (
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -1925,34 +1994,35 @@ export default function App() {
           </div>
         )}
 
-        {authReady && !firebaseUser && !showLockGate && navFilter.type === 'home' && (
-          <section className="bg-white/95 dark:bg-slate-900/95 border border-sky-200 dark:border-sky-800/70 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
-                <Cloud className="w-4 h-4" />
+        {authReady &&
+          !firebaseUser &&
+          !isSigningIn &&
+          !anonymousAuthDisabled &&
+          !showLockGate &&
+          navFilter.type === 'home' && (
+            <section className="bg-white/95 dark:bg-slate-900/95 border border-sky-200 dark:border-sky-800/70 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    เชื่อมต่อซิงก์คลาวด์ทุกอุปกรณ์ (ไม่ต้องใช้บัญชี Google)
+                  </h2>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    กดเชื่อมต่อเพื่อดึงและซิงก์รายการแอปจากฐานข้อมูลเดียวกันแบบ Real-time ได้ทันที
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  {pendingUrlInviteRef.current?.inviteCode
-                    ? 'พร้อมเชื่อมต่อฐานข้อมูลร่วมจากลิงก์เชิญแล้ว'
-                    : 'เชื่อมต่อบัญชี Google เพื่อซิงก์ทุกอุปกรณ์ในขั้นตอนเดียว'}
-                </h2>
-                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
-                  {pendingUrlInviteRef.current?.inviteCode
-                    ? 'กดปุ่มเชื่อมต่อด้วย Google เพื่อยืนยันตัวตนและซิงก์รายการแอปทั้งหมดอัตโนมัติทันที'
-                    : 'กดเชื่อมต่อด้วย Google เพื่อดึงและซิงก์รายการแอปจากฐานข้อมูลเดียวกันแบบ Real-time'}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => void signInWithGoogle()}
-              className="h-10 sm:h-9 px-4 rounded-lg bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 shadow-xs transition-all"
-            >
-              เชื่อมต่อด้วย Google
-            </button>
-          </section>
-        )}
+              <button
+                type="button"
+                onClick={() => void connectWithoutGoogle()}
+                className="h-10 sm:h-9 px-4 rounded-lg bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 shadow-xs transition-all"
+              >
+                เชื่อมต่อซิงก์อัตโนมัติ
+              </button>
+            </section>
+          )}
 
         {firebaseUser && needsInvitePrompt && (
           <section className="bg-white/95 dark:bg-slate-900/95 border border-sky-200 dark:border-sky-800/70 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
@@ -1963,10 +2033,10 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                    เชื่อมต่ออุปกรณ์นี้เข้าฐานข้อมูลร่วม
+                    เชื่อมต่ออุปกรณ์นี้เข้าฐานข้อมูลร่วม (ไม่ต้องใช้บัญชี Google)
                   </h2>
                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    บัญชี {firebaseUser.email} ยังไม่ได้เข้าร่วมฐานข้อมูลร่วม — วางลิงก์เชิญ หรือกรอกรหัสเชื่อมต่อ (KV-XXXX-XXXX-XXXX) จากเครื่องหลักเพื่อซิงก์ทันที
+                    วางลิงก์เชิญ หรือกรอกรหัสเชื่อมต่อ (KV-XXXX-XXXX-XXXX) จากเครื่องหลักเพื่อซิงก์ทันที หรือสร้างฐานข้อมูลใหม่สำหรับอุปกรณ์นี้
                   </p>
                 </div>
               </div>

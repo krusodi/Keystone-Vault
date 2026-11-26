@@ -308,7 +308,7 @@
     },
     "WorkspaceMember": {
       "title": "WorkspaceMember",
-      "description": "Authorized non-PII member record linking a Google account UID to a shared workspace.",
+      "description": "Authorized non-PII member record linking an anonymous or verified device UID to a shared workspace.",
       "type": "object",
       "properties": {
         "uid": {
@@ -364,7 +364,7 @@
     },
     "WorkspaceInvite": {
       "title": "WorkspaceInvite",
-      "description": "Owner-managed invite token enabling secondary devices with other Google accounts to join the shared workspace.",
+      "description": "Owner-managed invite token enabling secondary devices (anonymous or signed-in) to join the shared workspace.",
       "type": "object",
       "properties": {
         "id": {
@@ -707,7 +707,7 @@
     },
     "/workspaces/{workspaceId}/invites/{inviteId}": {
       "schema": { "$ref": "#/entities/WorkspaceInvite" },
-      "description": "Active invite tokens for connecting secondary Google accounts to the shared workspace."
+      "description": "Active invite tokens for connecting secondary devices to the shared workspace without requiring Google login."
     },
     "/workspaces/{workspaceId}/publicState/{docId}": {
       "schema": { "$ref": "#/entities/WorkspacePublicIndex" },

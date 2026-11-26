@@ -104,11 +104,13 @@ export function SystemSettingsView({
     isSigningIn,
     authError,
     unauthorizedDomain,
+    anonymousAuthDisabled,
     syncState,
     syncError,
     lastSyncedAt,
+    connectWithoutGoogle,
     signInWithGoogle,
-    signOutGoogle,
+    signOutCloud,
   } = useFirebase();
   const [manualSyncNotice, setManualSyncNotice] = useState<string | null>(null);
   const [creatingInvite, setCreatingInvite] = useState(false);
@@ -532,7 +534,7 @@ export function SystemSettingsView({
                 ซิงก์ข้อมูลบนคลาวด์ Firebase ({projectId})
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                เชื่อมต่อบัญชี Google เพื่อสำรองชื่อระบบ รายการแอป และคลังรหัสที่เข้ารหัสแล้วข้ามอุปกรณ์
+                ซิงก์ชื่อระบบ รายการแอป และคลังรหัสที่เข้ารหัสแล้วข้ามอุปกรณ์แบบ Real-time โดยไม่ต้องยืนยันด้วยบัญชี Google
               </p>
             </div>
           </div>
@@ -557,25 +559,36 @@ export function SystemSettingsView({
                 </span>
               </button>
 
+              {!user.isAnonymous ? (
+                <button
+                  type="button"
+                  disabled={isSigningIn}
+                  onClick={connectWithoutGoogle}
+                  className="inline-flex items-center gap-1.5 h-10 sm:h-9 px-3.5 rounded-lg border border-sky-200 dark:border-sky-800 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950/40 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                >
+                  <span>สลับเป็นโหมดไม่ต้องใช้ Google</span>
+                </button>
+              ) : null}
+
               <button
                 type="button"
-                onClick={signOutGoogle}
+                onClick={signOutCloud}
                 className="inline-flex items-center gap-1.5 h-10 sm:h-9 px-3.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>ออกจากบัญชี Google</span>
+                <span>ตัดการเชื่อมต่อคลาวด์</span>
               </button>
             </div>
           ) : (
             <button
               type="button"
               disabled={isSigningIn}
-              onClick={signInWithGoogle}
+              onClick={connectWithoutGoogle}
               className="inline-flex items-center gap-1.5 h-10 sm:h-9 px-4 rounded-lg bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 disabled:opacity-60 text-white text-xs font-semibold shadow-sm shadow-sky-600/20 cursor-pointer whitespace-nowrap transition-all"
             >
               <Cloud className="w-4 h-4" />
               <span>
-                {isSigningIn ? 'กำลังเชื่อมต่อ...' : 'เชื่อมต่อด้วย Google'}
+                {isSigningIn ? 'กำลังเชื่อมต่อ...' : 'เชื่อมต่อซิงก์อัตโนมัติ (ไม่ต้องใช้ Google)'}
               </span>
             </button>
           )}
@@ -586,7 +599,9 @@ export function SystemSettingsView({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="space-y-0.5">
                 <p className="font-semibold text-slate-900 dark:text-slate-100">
-                  {user.displayName || 'บัญชี Google'} ({user.email})
+                  {user.isAnonymous
+                    ? 'โหมดซิงก์อัตโนมัติ (ไม่ต้องยืนยันด้วยบัญชี Google)'
+                    : `${user.displayName || 'บัญชี Google'} (${user.email})`}
                 </p>
                 <p className="text-slate-500 dark:text-slate-400">
                   โปรเจกต์: <span className="font-mono">{projectId}</span>
@@ -604,7 +619,7 @@ export function SystemSettingsView({
             </div>
           ) : (
             <p className="text-slate-600 dark:text-slate-400">
-              ขณะนี้แอปบันทึกข้อมูลในเครื่อง (Local Storage) — เข้าสู่ระบบด้วย Google เพื่อซิงก์ข้อมูลไปยัง Firestore ของโปรเจกต์ <span className="font-mono font-semibold">{projectId}</span>
+              ขณะนี้แอปบันทึกข้อมูลในเครื่อง (Local Storage) — กดเชื่อมต่อซิงก์อัตโนมัติเพื่อซิงก์ข้อมูลไปยัง Firestore ของโปรเจกต์ <span className="font-mono font-semibold">{projectId}</span> โดยไม่ต้องล็อกอิน Google
             </p>
           )}
 
@@ -614,6 +629,26 @@ export function SystemSettingsView({
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>{authError || syncError}</span>
               </div>
+              {anonymousAuthDisabled && (
+                <div className="flex flex-wrap items-center gap-2 pl-6">
+                  <a
+                    href={`https://console.firebase.google.com/project/${projectId}/authentication/providers`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                  >
+                    เปิด Firebase Console → เปิดใช้งาน Anonymous
+                  </a>
+                  <button
+                    type="button"
+                    disabled={isSigningIn}
+                    onClick={() => void connectWithoutGoogle()}
+                    className="px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-200 font-semibold hover:bg-rose-100/60 cursor-pointer disabled:opacity-60"
+                  >
+                    ลองเชื่อมต่อใหม่
+                  </button>
+                </div>
+              )}
               {unauthorizedDomain && (
                 <div className="flex flex-wrap items-center gap-2 pl-6">
                   <button
@@ -664,7 +699,7 @@ export function SystemSettingsView({
                     เชื่อมต่ออุปกรณ์อื่นด้วยฐานข้อมูลเดียวกัน ({workspaceId})
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    ใช้บัญชี Google เดียวกันได้ทันทีทุกเครื่อง หรือสร้างรหัสเชิญเพื่อให้เครื่องที่ใช้บัญชี Google อื่นเข้าใช้ฐานข้อมูลนี้ร่วมกัน
+                    สร้างลิงก์เชิญหรือรหัสเชื่อมต่อเพื่อเปิดบนอุปกรณ์อื่นแล้วซิงก์เข้าฐานข้อมูลนี้ทันทีโดยไม่ต้องล็อกอิน Google
                   </p>
                 </div>
 
